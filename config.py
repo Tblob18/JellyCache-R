@@ -73,16 +73,16 @@ class PathConfig:
 
 
 @dataclass
-class PlexConfig:
-    """Configuration for Plex server settings."""
-    plex_url: str = ""
-    plex_token: str = ""
+class JellyfinConfig:
+    """Configuration for Jellyfin server settings."""
+    jellyfin_url: str = ""
+    api_key: str = ""
     valid_sections: Optional[List[int]] = None
     number_episodes: int = 10
     days_to_monitor: int = 183
     users_toggle: bool = True
     skip_ondeck: Optional[List[str]] = None
-    skip_watchlist: Optional[List[str]] = None
+    skip_favorites: Optional[List[str]] = None
     users: Optional[List[dict]] = None  # User list from settings file
 
     def __post_init__(self):
@@ -90,8 +90,8 @@ class PlexConfig:
             self.valid_sections = []
         if self.skip_ondeck is None:
             self.skip_ondeck = []
-        if self.skip_watchlist is None:
-            self.skip_watchlist = []
+        if self.skip_favorites is None:
+            self.skip_favorites = []
         if self.users is None:
             self.users = []
 
@@ -99,26 +99,22 @@ class PlexConfig:
 @dataclass
 class CacheConfig:
     """Configuration for caching behavior."""
-    watchlist_toggle: bool = True
-    watchlist_episodes: int = 5
+    favorites_toggle: bool = True
+    favorites_episodes: int = 5
     watched_move: bool = True
-
-    # Remote watchlist via RSS
-    remote_watchlist_toggle: bool = False
-    remote_watchlist_rss_url: str = ""
 
     # Cache retention: how long files stay on cache before being moved back to array
     # Files cached less than this many hours ago will not be restored to array
-    # Applies to all cached files (OnDeck, Watchlist, etc.) to protect against accidental changes
+    # Applies to all cached files (OnDeck, Favorites, etc.) to protect against accidental changes
     cache_retention_hours: int = 12
 
-    # Watchlist retention: auto-expire watchlist items after X days
-    # Files are removed from cache X days after being added to watchlist, even if still on watchlist
-    # 0 = disabled (files stay as long as they're on any user's watchlist)
+    # Favorites retention: auto-expire favorites items after X days
+    # Files are removed from cache X days after being marked as favorite, even if still favorited
+    # 0 = disabled (files stay as long as they're marked as favorite by any user)
     # Supports fractional days (e.g., 0.5 = 12 hours) for testing
-    watchlist_retention_days: float = 0
+    favorites_retention_days: float = 0
 
-    # Cache size limit: maximum space PlexCache can use on the cache drive
+    # Cache size limit: maximum space JellyCache can use on the cache drive
     # Supports formats: "250GB", "500MB", "50%", or just "250" (defaults to GB)
     # Empty string or "0" means no limit
     cache_limit: str = ""
@@ -204,7 +200,7 @@ class ConfigManager:
         self.settings_data: Dict[str, Any] = {}
         self.notification = NotificationConfig()
         self.paths = PathConfig()
-        self.plex = PlexConfig()
+        self.jellyfin = JellyfinConfig()
         self.cache = CacheConfig()
         self.performance = PerformanceConfig()
         self.debug = False
@@ -253,44 +249,42 @@ class ConfigManager:
     
     def _load_all_configs(self) -> None:
         """Load all configuration sections."""
-        self._load_plex_config()
+        self._load_jellyfin_config()
         self._load_cache_config()
         self._load_path_config()
         self._load_performance_config()
         self._load_notification_config()
         self._load_misc_config()
     
-    def _load_plex_config(self) -> None:
-        """Load Plex-related configuration."""
-        self.plex.plex_url = self.settings_data['PLEX_URL']
-        self.plex.plex_token = self.settings_data['PLEX_TOKEN']
-        self.plex.number_episodes = self.settings_data['number_episodes']
-        self.plex.valid_sections = self.settings_data['valid_sections']
-        self.plex.days_to_monitor = self.settings_data['days_to_monitor']
-        self.plex.users_toggle = self.settings_data['users_toggle']
+    def _load_jellyfin_config(self) -> None:
+        """Load Jellyfin-related configuration."""
+        # Support both new (jellyfin_url, api_key) and legacy (PLEX_URL, PLEX_TOKEN) names for backwards compatibility
+        self.jellyfin.jellyfin_url = self.settings_data.get('jellyfin_url', self.settings_data.get('PLEX_URL', ''))
+        self.jellyfin.api_key = self.settings_data.get('api_key', self.settings_data.get('PLEX_TOKEN', ''))
+        self.jellyfin.number_episodes = self.settings_data['number_episodes']
+        self.jellyfin.valid_sections = self.settings_data['valid_sections']
+        self.jellyfin.days_to_monitor = self.settings_data['days_to_monitor']
+        self.jellyfin.users_toggle = self.settings_data['users_toggle']
         
         # Handle skip settings
         skip_users = self.settings_data.get('skip_users')
         if skip_users is not None:
-            self.plex.skip_ondeck = self.settings_data.get('skip_ondeck', skip_users)
-            self.plex.skip_watchlist = self.settings_data.get('skip_watchlist', skip_users)
+            self.jellyfin.skip_ondeck = self.settings_data.get('skip_ondeck', skip_users)
+            self.jellyfin.skip_favorites = self.settings_data.get('skip_favorites', self.settings_data.get('skip_watchlist', skip_users))
             del self.settings_data['skip_users']
         else:
-            self.plex.skip_ondeck = self.settings_data.get('skip_ondeck', [])
-            self.plex.skip_watchlist = self.settings_data.get('skip_watchlist', [])
+            self.jellyfin.skip_ondeck = self.settings_data.get('skip_ondeck', [])
+            self.jellyfin.skip_favorites = self.settings_data.get('skip_favorites', self.settings_data.get('skip_watchlist', []))
 
-        # Load users list (contains tokens for all users including remote)
-        self.plex.users = self.settings_data.get('users', [])
+        # Load users list
+        self.jellyfin.users = self.settings_data.get('users', [])
     
     def _load_cache_config(self) -> None:
         """Load cache-related configuration."""
-        self.cache.watchlist_toggle = self.settings_data['watchlist_toggle']
-        self.cache.watchlist_episodes = self.settings_data['watchlist_episodes']
+        # Support both new (favorites) and legacy (watchlist) names for backwards compatibility
+        self.cache.favorites_toggle = self.settings_data.get('favorites_toggle', self.settings_data.get('watchlist_toggle', True))
+        self.cache.favorites_episodes = self.settings_data.get('favorites_episodes', self.settings_data.get('watchlist_episodes', 5))
         self.cache.watched_move = self.settings_data['watched_move']
-
-        # Load remote watchlist settings
-        self.cache.remote_watchlist_toggle = self.settings_data.get('remote_watchlist_toggle', False)
-        self.cache.remote_watchlist_rss_url = self.settings_data.get('remote_watchlist_rss_url', "")
 
         # Log deprecation warning for old cache expiry settings (these are now ignored)
         if 'watchlist_cache_expiry' in self.settings_data or 'watched_cache_expiry' in self.settings_data:
@@ -299,8 +293,8 @@ class ConfigManager:
         # Load cache retention setting (default 12 hours)
         self.cache.cache_retention_hours = self.settings_data.get('cache_retention_hours', 12)
 
-        # Load watchlist retention setting (default 0 = disabled)
-        self.cache.watchlist_retention_days = self.settings_data.get('watchlist_retention_days', 0)
+        # Load favorites retention setting (default 0 = disabled) - support both names
+        self.cache.favorites_retention_days = self.settings_data.get('favorites_retention_days', self.settings_data.get('watchlist_retention_days', 0))
 
         # Load and parse cache limit setting
         self.cache.cache_limit = self.settings_data.get('cache_limit', "")
