@@ -244,7 +244,13 @@ class JellyfinManager:
                 logging.warning("No users loaded, cannot get media file path")
                 return None
             
-            user_id = list(self._users_cache.values())[0]['id']
+            # Get first user and validate structure
+            first_user = list(self._users_cache.values())[0]
+            if not isinstance(first_user, dict) or 'id' not in first_user:
+                logging.warning("Invalid user data structure in cache")
+                return None
+            
+            user_id = first_user['id']
             
             # Get item details
             item = self._make_request("GET", f"/Users/{user_id}/Items/{item_id}")
@@ -353,12 +359,21 @@ class JellyfinManager:
                 # Check if item was played recently
                 if last_played:
                     try:
-                        last_played_dt = datetime.fromisoformat(last_played.replace('Z', '+00:00'))
-                        now = datetime.now(last_played_dt.tzinfo) if last_played_dt.tzinfo else datetime.now()
-                        days_since_played = (now - last_played_dt.replace(tzinfo=None) if last_played_dt.tzinfo else now - last_played_dt).days
+                        # Parse ISO format datetime, handling 'Z' suffix
+                        last_played_str = last_played.replace('Z', '+00:00')
+                        last_played_dt = datetime.fromisoformat(last_played_str)
+                        
+                        # Always work with timezone-naive datetimes for comparison
+                        if last_played_dt.tzinfo:
+                            last_played_dt = last_played_dt.replace(tzinfo=None)
+                        
+                        now = datetime.now()
+                        days_since_played = (now - last_played_dt).days
+                        
                         if days_since_played > days_to_monitor:
                             continue
-                    except Exception:
+                    except (ValueError, TypeError) as e:
+                        logging.debug(f"Error parsing last played date '{last_played}': {e}")
                         pass
                 
                 if item_type == "Episode":
@@ -574,7 +589,8 @@ class JellyfinManager:
                 if date_created:
                     try:
                         favorited_at = datetime.fromisoformat(date_created.replace('Z', '+00:00'))
-                    except Exception:
+                    except (ValueError, TypeError) as e:
+                        logging.debug(f"Error parsing date created '{date_created}': {e}")
                         pass
                 
                 if item_type == "Series":
