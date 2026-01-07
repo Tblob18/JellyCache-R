@@ -44,7 +44,7 @@ def _log_api_error(context: str, error: Exception) -> None:
     if "401" in error_str or "Unauthorized" in error_str:
         logging.error(f"[JELLYFIN API] Authentication failed ({context}): {error}")
         logging.error(f"[JELLYFIN API] Your Jellyfin API key is invalid or has been revoked.")
-        logging.error(f"[JELLYFIN API] To fix: Run 'python3 jellycache_setup.py' and re-authenticate.")
+        logging.error(f"[JELLYFIN API] To fix: Generate a new API key in Jellyfin Dashboard → API Keys")
     elif "429" in error_str or "Too Many Requests" in error_str:
         logging.warning(f"[JELLYFIN API] Rate limited ({context}): {error}")
         logging.warning(f"[JELLYFIN API] Consider increasing delays between API calls")
@@ -238,8 +238,16 @@ class JellyfinManager:
         """
         try:
             self._rate_limited_api_call()
+            
+            # Get any user ID for the request (need a user context)
+            if not self._users_cache:
+                logging.warning("No users loaded, cannot get media file path")
+                return None
+            
+            user_id = list(self._users_cache.values())[0]['id']
+            
             # Get item details
-            item = self._make_request("GET", f"/Users/{list(self._users_cache.values())[0]['id']}/Items/{item_id}")
+            item = self._make_request("GET", f"/Users/{user_id}/Items/{item_id}")
             
             # Navigate to the file path
             path = item.get("Path")
@@ -346,7 +354,8 @@ class JellyfinManager:
                 if last_played:
                     try:
                         last_played_dt = datetime.fromisoformat(last_played.replace('Z', '+00:00'))
-                        days_since_played = (datetime.now(last_played_dt.tzinfo) - last_played_dt).days
+                        now = datetime.now(last_played_dt.tzinfo) if last_played_dt.tzinfo else datetime.now()
+                        days_since_played = (now - last_played_dt.replace(tzinfo=None) if last_played_dt.tzinfo else now - last_played_dt).days
                         if days_since_played > days_to_monitor:
                             continue
                     except Exception:

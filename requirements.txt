@@ -1,3 +1,4 @@
-jellyfin-apiclient-python>=1.9.2
+# Using requests directly for Jellyfin REST API
+# jellyfin-apiclient-python is listed for reference but not currently used
 requests>=2.25.0
 tqdm>=4.60.0
