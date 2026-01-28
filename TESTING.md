@@ -95,7 +95,8 @@ Create a test configuration file `test_jellycache_settings.json`:
       "real_path": "/tmp/test_array/tv/",
       "cache_path": "/tmp/test_cache/tv/",
       "cacheable": true,
-      "enabled": true
+      "enabled": true,
+      "_comment": "plex_path is kept for compatibility with PlexCache-R; it represents the path as seen by Jellyfin"
     },
     {
       "name": "Test Movies",
@@ -704,8 +705,8 @@ Before each test run:
 
 1. **Manually Set Old Timestamps**
    ```bash
-   # On Linux
-   touch -t 202601010000 /mnt/cache/tv/old_file.mkv
+   # On Linux - use a date from the past (e.g., December 1, 2025)
+   touch -t 202512010000 /mnt/cache/tv/old_file.mkv
    ```
 
 2. **Check Priority File**
