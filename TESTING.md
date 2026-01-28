@@ -573,7 +573,7 @@ mkdir -p /tmp/test_logs
 
 ## Manual Testing Procedures
 
-### Pre-Flight Checklist
+### Preflight Checklist
 
 Before each test run:
 
