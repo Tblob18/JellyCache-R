@@ -495,8 +495,8 @@ class ConfigManager:
             # Core settings (always saved)
             self.settings_data.update({
                 'cache_dir': self.paths.cache_dir,
-                'skip_ondeck': self.plex.skip_ondeck,
-                'skip_watchlist': self.plex.skip_watchlist,
+                'skip_ondeck': self.jellyfin.skip_ondeck,
+                'skip_favorites': self.jellyfin.skip_favorites,
                 'exit_if_active_session': self.exit_if_active_session,
             })
 
