@@ -10,7 +10,7 @@ import threading
 import json
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Set, Optional, Tuple, Dict, TYPE_CHECKING
+from typing import List, Set, Optional, Tuple, Dict, TYPE_CHECKING, Any
 import re
 
 from logging_config import get_console_lock
@@ -20,6 +20,22 @@ if TYPE_CHECKING:
 
 # Extension used to mark array files that have been cached
 PLEXCACHED_EXTENSION = ".plexcached"
+
+# Subtitle file extensions (excluded from upgrade detection to prevent cross-matching)
+SUBTITLE_EXTENSIONS = {'.srt', '.sub', '.ass', '.ssa', '.vtt', '.idx', '.sbv'}
+
+
+def is_subtitle_file(filepath: str) -> bool:
+    """Check if a file is a subtitle based on its extension.
+
+    Args:
+        filepath: Path to the file to check.
+
+    Returns:
+        True if the file has a subtitle extension, False otherwise.
+    """
+    ext = os.path.splitext(filepath)[1].lower()
+    return ext in SUBTITLE_EXTENSIONS
 
 
 def format_bytes(bytes_value: int) -> str:
@@ -74,15 +90,19 @@ def get_media_identity(filepath: str) -> str:
     return name
 
 
-def find_matching_plexcached(array_path: str, media_identity: str) -> Optional[str]:
+def find_matching_plexcached(array_path: str, media_identity: str, source_file: str) -> Optional[str]:
     """Find a .plexcached file in the array path that matches the media identity.
 
     This handles the case where Radarr/Sonarr upgraded a file - the .plexcached
     backup may have a different quality suffix but same core identity.
 
+    Important: Only matches files of the same type (video<->video, subtitle<->subtitle)
+    to prevent cross-matching between video and subtitle files with the same title.
+
     Args:
         array_path: Directory path on the array to search
         media_identity: The core media identity to match (from get_media_identity)
+        source_file: The source file we're looking for a match for (used to determine type)
 
     Returns:
         Full path to matching .plexcached file, or None if not found
@@ -90,9 +110,20 @@ def find_matching_plexcached(array_path: str, media_identity: str) -> Optional[s
     if not os.path.isdir(array_path):
         return None
 
+    # Determine if source is a subtitle file
+    source_is_subtitle = is_subtitle_file(source_file)
+
     try:
         for entry in os.scandir(array_path):
             if entry.is_file() and entry.name.endswith(PLEXCACHED_EXTENSION):
+                # Extract original filename (without .plexcached)
+                original_name = entry.name[:-len(PLEXCACHED_EXTENSION)]
+
+                # Only match files of the same type (video<->video, subtitle<->subtitle)
+                entry_is_subtitle = is_subtitle_file(original_name)
+                if source_is_subtitle != entry_is_subtitle:
+                    continue
+
                 entry_identity = get_media_identity(entry.name)
                 if entry_identity == media_identity:
                     return entry.path
@@ -304,7 +335,8 @@ class CacheTimestampTracker:
         except IOError as e:
             logging.error(f"Could not save timestamp file: {type(e).__name__}: {e}")
 
-    def record_cache_time(self, cache_file_path: str, source: str = "unknown") -> None:
+    def record_cache_time(self, cache_file_path: str, source: str = "unknown",
+                          original_inode: Optional[int] = None) -> None:
         """Record the current time and source when a file was cached.
 
         Only records if no entry exists - never overwrites existing timestamps.
@@ -312,6 +344,7 @@ class CacheTimestampTracker:
         Args:
             cache_file_path: The path to the cached file.
             source: Where the file came from - "ondeck", "watchlist", "pre-existing", or "unknown".
+            original_inode: The original inode of the array file (for hard-link restoration).
         """
         with self._lock:
             # Never overwrite existing timestamps - file was cached when it was first recorded
@@ -319,10 +352,13 @@ class CacheTimestampTracker:
                 logging.debug(f"Timestamp already exists for: {cache_file_path}")
                 return
 
-            self._timestamps[cache_file_path] = {
+            entry: Dict[str, Any] = {
                 "cached_at": datetime.now().isoformat(),
                 "source": source
             }
+            if original_inode is not None:
+                entry["original_inode"] = original_inode
+            self._timestamps[cache_file_path] = entry
             self._save()
             logging.debug(f"Recorded cache timestamp for: {cache_file_path} (source: {source})")
 
@@ -432,6 +468,23 @@ class CacheTimestampTracker:
             if isinstance(entry, dict):
                 return entry.get("source", "unknown")
             return "unknown"
+
+    def get_original_inode(self, cache_file_path: str) -> Optional[int]:
+        """Get the original array inode for a cached file (if it was hard-linked).
+
+        Args:
+            cache_file_path: The path to the cached file.
+
+        Returns:
+            The original inode number, or None if not recorded.
+        """
+        with self._lock:
+            if cache_file_path not in self._timestamps:
+                return None
+            entry = self._timestamps[cache_file_path]
+            if isinstance(entry, dict):
+                return entry.get("original_inode")
+            return None
 
     def cleanup_missing_files(self) -> int:
         """Remove entries for files that no longer exist on cache.
@@ -2006,7 +2059,7 @@ class FileFilter:
         # NOTE: Only treat as upgrade if the .plexcached has a DIFFERENT name than expected
         expected_plexcached = array_file + PLEXCACHED_EXTENSION
         cache_identity = get_media_identity(cache_file_name)
-        old_plexcached = find_matching_plexcached(array_path, cache_identity)
+        old_plexcached = find_matching_plexcached(array_path, cache_identity, cache_file_name)
         if old_plexcached and old_plexcached != expected_plexcached:
             # Found a .plexcached with different filename - this is a true upgrade scenario
             # Let _move_to_array handle it
@@ -2317,11 +2370,15 @@ class FileFilter:
             filename = os.path.basename(file_path)
             name, ext = os.path.splitext(filename)
 
-            # Handle subtitle files - strip language code suffix (e.g., ".en", ".eng", ".es", ".forced")
-            subtitle_extensions = {'.srt', '.sub', '.ass', '.ssa', '.vtt', '.idx'}
-            if ext.lower() in subtitle_extensions:
-                # Strip common language code patterns from the end
-                name = re.sub(r'\.(en|eng|es|spa|fr|fra|de|deu|ger|it|ita|pt|por|ja|jpn|ko|kor|zh|chi|forced|sdh|cc|hi)$', '', name, flags=re.IGNORECASE)
+            # Handle subtitle files - strip language code suffixes (e.g., ".en", ".eng", ".es", ".forced")
+            # Use a loop to handle chained suffixes like ".en.hi.srt" or ".en.forced.srt"
+            if ext.lower() in SUBTITLE_EXTENSIONS:
+                lang_pattern = re.compile(r'\.(en|eng|es|spa|fr|fra|de|deu|ger|it|ita|pt|por|ja|jpn|ko|kor|zh|chi|forced|sdh|cc|hi)$', re.IGNORECASE)
+                while True:
+                    new_name = lang_pattern.sub('', name)
+                    if new_name == name:
+                        break
+                    name = new_name
 
             cleaned = re.sub(r'\s*\([^)]*\)$', '', name).strip()
             return cleaned
@@ -2519,7 +2576,27 @@ class FileMover:
     def __init__(self, real_source: str, cache_dir: str, is_unraid: bool,
                  file_utils, debug: bool = False, mover_cache_exclude_file: Optional[str] = None,
                  timestamp_tracker: Optional['CacheTimestampTracker'] = None,
-                 path_modifier: Optional['MultiPathModifier'] = None):
+                 path_modifier: Optional['MultiPathModifier'] = None,
+                 create_plexcached_backups: bool = True,
+                 hardlinked_files: str = "skip"):
+        """Initialize the FileMover.
+
+        Args:
+            real_source: The real source directory path.
+            cache_dir: The cache directory path.
+            is_unraid: Whether running on Unraid.
+            file_utils: File utilities instance.
+            debug: Whether debug mode is enabled.
+            mover_cache_exclude_file: Path to the mover exclude file.
+            timestamp_tracker: Optional timestamp tracker instance.
+            path_modifier: Optional multi-path modifier instance.
+            create_plexcached_backups: Whether to create .plexcached backup files on array.
+                If False, array files are deleted after copying to cache instead of renamed.
+            hardlinked_files: How to handle files with multiple hard links.
+                "skip" = Skip caching files with hard links (default, safe for seeders)
+                "copy" = Copy to cache but don't modify original (preserves hard links)
+                "normal" = Treat as regular files (breaks hard links on array)
+        """
         self.real_source = real_source
         self.cache_dir = cache_dir
         self.is_unraid = is_unraid
@@ -2528,6 +2605,8 @@ class FileMover:
         self.mover_cache_exclude_file = mover_cache_exclude_file
         self.timestamp_tracker = timestamp_tracker
         self.path_modifier = path_modifier  # For multi-path support
+        self.create_plexcached_backups = create_plexcached_backups
+        self.hardlinked_files = hardlinked_files
         self._exclude_file_lock = threading.Lock()
         # Progress tracking
         self._progress_lock = threading.Lock()
@@ -2539,6 +2618,8 @@ class FileMover:
         self._last_display_lines = 0
         # Source tracking: maps cache file paths to their source (ondeck/watchlist)
         self._source_map: Dict[str, str] = {}
+        # Inode tracking: maps cache file paths to original array inodes (for hardlinked_files="copy")
+        self._inode_map: Dict[str, int] = {}
 
     def move_media_files(self, files: List[str], destination: str,
                         max_concurrent_moves_array: int, max_concurrent_moves_cache: int,
@@ -2879,14 +2960,17 @@ class FileMover:
 
     def _move_to_cache(self, array_file: str, cache_path: str, cache_file_name: str,
                        original_path: str = None) -> int:
-        """Copy file to cache and rename array original to .plexcached.
+        """Copy file to cache and handle array original based on settings.
 
         Order of operations ensures data safety:
-        1. Check for and clean up old .plexcached if this is an upgrade
-        2. Copy file to cache
-        3. Verify copy succeeded
-        4. Rename original to .plexcached (only after verified copy)
-        5. Verify rename succeeded
+        1. Check for hard links if configured to handle them
+        2. Check for and clean up old .plexcached if this is an upgrade
+        3. Copy file to cache
+        4. Verify copy succeeded
+        5. Handle array file based on settings:
+           - create_plexcached_backups=True: Rename to .plexcached
+           - create_plexcached_backups=False: Delete original
+           - hardlinked_files="copy": Leave original in place, store inode
         6. Record timestamp for cache retention
 
         If interrupted at any point, the original array file remains safe.
@@ -2896,11 +2980,28 @@ class FileMover:
         array_path = os.path.dirname(array_file)
 
         try:
-            # Step 0: Check for upgrade scenario - clean up old .plexcached if needed
+            # Step 0a: Check for hard links if not treating as normal files
+            original_inode = None
+            is_hardlinked = False
+            if self.hardlinked_files != "normal":
+                try:
+                    stat_info = os.stat(array_file)
+                    if stat_info.st_nlink > 1:
+                        is_hardlinked = True
+                        original_inode = stat_info.st_ino
+                        if self.hardlinked_files == "skip":
+                            logging.info(f"Skipping hard-linked file ({stat_info.st_nlink} links): {os.path.basename(array_file)}")
+                            return 0  # Success (skipped intentionally)
+                        elif self.hardlinked_files == "copy":
+                            logging.debug(f"Hard-linked file ({stat_info.st_nlink} links), will copy without modifying original: {os.path.basename(array_file)}")
+                except OSError as e:
+                    logging.debug(f"Could not check hard link count for {array_file}: {e}")
+
+            # Step 0b: Check for upgrade scenario - clean up old .plexcached if needed
             old_cache_file_to_remove = None
-            if not os.path.isfile(plexcached_file):
+            if self.create_plexcached_backups and not os.path.isfile(plexcached_file):
                 cache_identity = get_media_identity(cache_file_name)
-                old_plexcached = find_matching_plexcached(array_path, cache_identity)
+                old_plexcached = find_matching_plexcached(array_path, cache_identity, cache_file_name)
                 if old_plexcached and old_plexcached != plexcached_file:
                     old_name = os.path.basename(old_plexcached).replace(PLEXCACHED_EXTENSION, '')
                     new_name = os.path.basename(cache_file_name)
@@ -2925,15 +3026,26 @@ class FileMover:
             if not os.path.isfile(cache_file_name):
                 raise IOError(f"Copy verification failed: cache file not created at {cache_file_name}")
 
-            # Step 2: Rename array file to .plexcached
-            os.rename(array_file, plexcached_file)
-            logging.debug(f"Renamed array file: {array_file} -> {plexcached_file}")
+            # Step 2: Handle array file based on settings
+            if is_hardlinked and self.hardlinked_files == "copy":
+                # For hard-linked files in "copy" mode: leave original intact, store inode for restore
+                logging.debug(f"Leaving hard-linked array file intact: {array_file}")
+                if original_inode is not None:
+                    self._inode_map[cache_file_name] = original_inode
+            elif self.create_plexcached_backups:
+                # Normal mode: rename array file to .plexcached
+                os.rename(array_file, plexcached_file)
+                logging.debug(f"Renamed array file: {array_file} -> {plexcached_file}")
 
-            # Validate rename succeeded
-            if os.path.isfile(array_file):
-                raise IOError(f"Rename verification failed: original array file still exists at {array_file}")
-            if not os.path.isfile(plexcached_file):
-                raise IOError(f"Rename verification failed: .plexcached file not created at {plexcached_file}")
+                # Validate rename succeeded
+                if os.path.isfile(array_file):
+                    raise IOError(f"Rename verification failed: original array file still exists at {array_file}")
+                if not os.path.isfile(plexcached_file):
+                    raise IOError(f"Rename verification failed: .plexcached file not created at {plexcached_file}")
+            else:
+                # No backup mode: delete array file after successful copy
+                os.remove(array_file)
+                logging.debug(f"Deleted array file (no backup mode): {array_file}")
 
             # Step 3: Add to exclude file (and remove old entry if upgrade)
             self._add_to_exclude_file(cache_file_name)
@@ -2944,7 +3056,7 @@ class FileMover:
             if self.timestamp_tracker:
                 # Look up source from the source map using the original path (e.g., /mnt/user/...)
                 source = self._source_map.get(original_path, "unknown") if original_path else "unknown"
-                self.timestamp_tracker.record_cache_time(cache_file_name, source)
+                self.timestamp_tracker.record_cache_time(cache_file_name, source, original_inode)
 
             # Log successful move using tqdm.write to avoid progress bar interference
             from tqdm import tqdm
@@ -2963,7 +3075,9 @@ class FileMover:
     def _move_to_array(self, cache_file: str, array_path: str, cache_file_name: str) -> int:
         """Move file from cache back to array.
 
-        Handles four scenarios:
+        Handles multiple scenarios:
+        0. Hard-linked file (copy mode): Original array file was never touched
+           - Just delete cache copy if array file still exists with same inode
         1a. Exact .plexcached exists, same size: Rename it back to original (fast)
         1b. Exact .plexcached exists, different size: In-place upgrade detected
             - Delete old .plexcached, copy upgraded cache file to array
@@ -2979,6 +3093,43 @@ class FileMover:
             # Derive the original array file path and .plexcached path
             array_file = os.path.join(array_path, os.path.basename(cache_file))
             plexcached_file = array_file + PLEXCACHED_EXTENSION
+
+            # Scenario 0: Check if this was a hard-linked file (copy mode)
+            # In copy mode, the original array file was never modified
+            original_inode = None
+            if self.timestamp_tracker:
+                original_inode = self.timestamp_tracker.get_original_inode(cache_file_name)
+            if original_inode is None:
+                # Also check in-memory inode map (in case tracker not configured)
+                original_inode = self._inode_map.get(cache_file_name)
+
+            if original_inode is not None:
+                # This was cached with hardlinked_files="copy" - original was left intact
+                try:
+                    if os.path.isfile(array_file):
+                        current_stat = os.stat(array_file)
+                        if current_stat.st_ino == original_inode:
+                            # Original file still exists with same inode - just delete cache
+                            logging.debug(f"Hard-linked file still intact on array (inode {original_inode}), removing cache copy")
+                            if os.path.isfile(cache_file):
+                                os.remove(cache_file)
+                                logging.debug(f"Deleted cache file: {cache_file}")
+
+                            # Remove timestamp entry
+                            if self.timestamp_tracker:
+                                self.timestamp_tracker.remove_entry(cache_file)
+
+                            # Clean up inode map
+                            if cache_file_name in self._inode_map:
+                                del self._inode_map[cache_file_name]
+
+                            logging.debug(f"Restored hard-linked file: {os.path.basename(array_file)}")
+                            return 0
+                        else:
+                            # Inode changed - file was replaced/modified, treat as normal restore
+                            logging.debug(f"Array file inode changed ({original_inode} -> {current_stat.st_ino}), copying from cache")
+                except OSError as e:
+                    logging.debug(f"Could not check inode for {array_file}: {e}")
 
             # Scenario 1: Exact .plexcached exists (same filename)
             if os.path.isfile(plexcached_file):
@@ -3008,7 +3159,7 @@ class FileMover:
             # Scenario 2: Check for filename-change upgrade (different .plexcached with same media identity)
             elif os.path.isfile(cache_file):
                 cache_identity = get_media_identity(cache_file)
-                old_plexcached = find_matching_plexcached(array_path, cache_identity)
+                old_plexcached = find_matching_plexcached(array_path, cache_identity, cache_file)
 
                 # Scenario 2: Upgraded file - old .plexcached exists with different name
                 if old_plexcached and old_plexcached != plexcached_file:
@@ -3059,6 +3210,10 @@ class FileMover:
                 # Remove timestamp entry
                 if self.timestamp_tracker:
                     self.timestamp_tracker.remove_entry(cache_file)
+
+                # Clean up inode map if present
+                if cache_file_name in self._inode_map:
+                    del self._inode_map[cache_file_name]
 
                 # Log successful restore at DEBUG level (summary already shown at INFO)
                 logging.debug(f"Restored to array: {os.path.basename(array_file)}")

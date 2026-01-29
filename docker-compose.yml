@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  jellycache:
+    build: .
+    container_name: jellycache-r
+    restart: "no"  # Run once per execution (use cron/User Scripts to schedule)
+    
+    volumes:
+      # Configuration file
+      - /mnt/user/appdata/jellycache/jellycache_settings.json:/config/jellycache_settings.json:ro
+      
+      # Logs directory
+      - /mnt/user/appdata/jellycache/logs:/logs
+      
+      # Media directories - MUST match your path mappings
+      # Array storage (where files currently live)
+      - /mnt/user/Vault/Media:/mnt/user/Vault/Media
+      
+      # Cache storage (where files will be moved to)
+      - /mnt/cache/Vault/Media:/mnt/cache/Vault/Media
+    
+    environment:
+      - TZ=Europe/Berlin  # Adjust to your timezone
+      - PUID=99           # nobody user on Unraid
+      - PGID=100          # users group on Unraid
+    
+    # For dry-run testing, uncomment this line:
+    # command: ["python", "plexcache_app.py", "--config", "/config/jellycache_settings.json", "--dry-run", "--verbose"]
+
+# Notes for Unraid deployment:
+# 
+# 1. Create the appdata directory:
+#    mkdir -p /mnt/user/appdata/jellycache/logs
+#
+# 2. Copy jellycache_settings.json to:
+#    /mnt/user/appdata/jellycache/jellycache_settings.json
+#
+# 3. Build and test with dry-run:
+#    docker-compose up --build
+#
+# 4. For scheduled runs, use Unraid's User Scripts plugin:
+#    cd /mnt/user/appdata/jellycache && docker-compose up --build
+#
+# 5. Or use cron (add to /boot/config/go):
+#    echo "0 */6 * * * cd /mnt/user/appdata/jellycache && docker-compose up --build" >> /var/spool/cron/crontabs/root

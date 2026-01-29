@@ -1,0 +1,46 @@
+{
+    "jellyfin_url": "http://YOUR_JELLYFIN_IP:8096",
+    "api_key": "YOUR_JELLYFIN_API_KEY",
+    "valid_sections": [],
+    "number_episodes": 5,
+    "days_to_monitor": 7,
+    "users_toggle": true,
+    "skip_ondeck": [],
+    "skip_favorites": [],
+    "favorites_toggle": true,
+    "favorites_episodes": 3,
+    "watched_move": true,
+    "cache_retention_hours": 72,
+    "favorites_retention_days": 7,
+    "cache_limit": "",
+    "cache_dir": "/mnt/cache/YOUR_SHARE/Media/",
+    "path_mappings": [
+        {
+            "name": "TV Shows",
+            "plex_path": "/data/tvshows/",
+            "real_path": "/mnt/user/YOUR_SHARE/Media/TV/",
+            "cache_path": "/mnt/cache/YOUR_SHARE/Media/TV/",
+            "cacheable": true,
+            "enabled": true,
+            "_comment": "plex_path is the path Jellyfin sees inside its container"
+        },
+        {
+            "name": "Movies",
+            "plex_path": "/data/movies/",
+            "real_path": "/mnt/user/YOUR_SHARE/Media/Movies/",
+            "cache_path": "/mnt/cache/YOUR_SHARE/Media/Movies/",
+            "cacheable": true,
+            "enabled": true
+        }
+    ],
+    "max_concurrent_moves_array": 2,
+    "max_concurrent_moves_cache": 3,
+    "move_method": "move",
+    "preserve_timestamps": true,
+    "verify_moves": true,
+    "exit_if_active_session": false,
+    "create_plexcached_backups": true,
+    "hardlinked_files": "skip",
+    "notification_type": "unraid",
+    "log_level": "INFO"
+}

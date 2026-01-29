@@ -8,17 +8,29 @@ __pycache__/
 # Logs
 logs/
 
-# User data files
+# User data files (contain API keys, personal paths)
 plexcache_settings.json
+jellycache_settings.json
+jellycache_settings_unraid.json
+*_settings.json
+!*_settings.example.json
+
+# Runtime tracker files
 plexcache_mover_files_to_exclude.txt
 plexcache_timestamps.json
 plexcache_watchlist_tracker.json
+plexcache_ondeck_tracker.json
 plexcache_user_tokens.json
 plexcache.lock
+plexcache_migration_v2.complete
+unraid_mover_exclusions.txt
 
 # Old cache files (deprecated in v2.0)
 plexcache_watchlist_cache.json
 plexcache_watched_cache.json
+
+# Test config files
+test_*.json
 
 # Local documentation
 FUTURE_ENHANCEMENTS.md
