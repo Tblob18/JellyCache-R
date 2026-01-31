@@ -497,19 +497,28 @@ class ConfigManager:
 
         # Validate positive integers
         positive_int_fields = [
-            'number_episodes', 'days_to_monitor', 'watchlist_episodes',
+            'number_episodes', 'days_to_monitor',
             'max_concurrent_moves_array', 'max_concurrent_moves_cache'
         ]
+        # Only validate episode counts if they exist
+        if 'watchlist_episodes' in self.settings_data:
+            positive_int_fields.append('watchlist_episodes')
+        if 'favorites_episodes' in self.settings_data:
+            positive_int_fields.append('favorites_episodes')
+            
         for field in positive_int_fields:
             value = self.settings_data.get(field, 0)
             if value < 0:
                 errors.append(f"'{field}' must be non-negative, got {value}")
 
-        # Validate non-empty URL and token
-        if not self.settings_data.get('PLEX_URL', '').strip():
-            errors.append("'PLEX_URL' cannot be empty")
-        if not self.settings_data.get('PLEX_TOKEN', '').strip():
-            errors.append("'PLEX_TOKEN' cannot be empty")
+        # Validate non-empty URL and token (support both new and legacy names)
+        jellyfin_url = self.settings_data.get('jellyfin_url', '') or self.settings_data.get('PLEX_URL', '')
+        api_key = self.settings_data.get('api_key', '') or self.settings_data.get('PLEX_TOKEN', '')
+        
+        if not jellyfin_url.strip():
+            errors.append("'jellyfin_url' (or 'PLEX_URL') cannot be empty")
+        if not api_key.strip():
+            errors.append("'api_key' (or 'PLEX_TOKEN') cannot be empty")
 
         if errors:
             error_msg = "Configuration validation errors: " + "; ".join(errors)
