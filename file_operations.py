@@ -3037,9 +3037,9 @@ class FileMover:
                 os.rename(array_file, plexcached_file)
                 logging.debug(f"Renamed array file: {array_file} -> {plexcached_file}")
 
-                # Validate rename succeeded
-                if os.path.isfile(array_file):
-                    raise IOError(f"Rename verification failed: original array file still exists at {array_file}")
+                # Validate rename succeeded - only check .plexcached exists
+                # Note: On Unraid's /mnt/user/ FUSE filesystem, the old path may briefly
+                # appear to still exist after rename due to filesystem caching
                 if not os.path.isfile(plexcached_file):
                     raise IOError(f"Rename verification failed: .plexcached file not created at {plexcached_file}")
             else:
