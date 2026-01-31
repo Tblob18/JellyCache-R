@@ -371,6 +371,7 @@ class JellyfinManager:
                         days_since_played = (now - last_played_dt).days
                         
                         if days_since_played > days_to_monitor:
+                            logging.debug(f"Skipping '{item.get('Name', 'unknown')}' — last played {days_since_played} days ago (limit: {days_to_monitor})")
                             continue
                     except (ValueError, TypeError) as e:
                         logging.debug(f"Error parsing last played date '{last_played}': {e}")

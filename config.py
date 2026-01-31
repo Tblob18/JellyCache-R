@@ -79,7 +79,7 @@ class JellyfinConfig:
     api_key: str = ""
     valid_sections: Optional[List[int]] = None
     number_episodes: int = 10
-    days_to_monitor: int = 183
+    days_to_monitor: int = 7
     users_toggle: bool = True
     skip_ondeck: Optional[List[str]] = None
     skip_favorites: Optional[List[str]] = None

@@ -70,7 +70,7 @@ Create `jellycache_settings.json` (or `plexcache_settings.json` for backwards co
   "api_key": "your_jellyfin_api_key_here",
   "valid_sections": [],
   "number_episodes": 10,
-  "days_to_monitor": 183,
+  "days_to_monitor": 7,
   "users_toggle": true,
   "skip_ondeck": [],
   "skip_favorites": [],
