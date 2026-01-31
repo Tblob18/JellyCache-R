@@ -526,6 +526,13 @@ class ConfigManager:
 
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(self.settings_data, f, indent=4)
+        except OSError as e:
+            # Handle read-only file system gracefully (e.g., Docker with :ro mount)
+            if e.errno == 30:  # Read-only file system
+                logging.debug(f"Config file is read-only, skipping save: {self.config_file}")
+            else:
+                logging.error(f"Error saving settings: {type(e).__name__}: {e}")
+                raise
         except Exception as e:
             logging.error(f"Error saving settings: {type(e).__name__}: {e}")
             raise
