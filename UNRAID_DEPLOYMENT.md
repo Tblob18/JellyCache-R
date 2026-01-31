@@ -86,7 +86,29 @@ Example for German folder names:
 ]
 ```
 
-### 5. Test with dry-run
+### 5. Update docker-compose.yml for your paths
+
+Edit `/mnt/user/appdata/jellycache/docker-compose.yml` and update the volume mounts to match your share names:
+
+```yaml
+volumes:
+  # Configuration file
+  - /mnt/user/appdata/jellycache/jellycache_settings.json:/config/jellycache_settings.json:ro
+  
+  # Logs directory
+  - /mnt/user/appdata/jellycache/logs:/logs
+  
+  # Unraid system info (for disk spin-up detection) - IMPORTANT!
+  - /var/local/emhttp:/var/local/emhttp:ro
+  
+  # Media directories - update these to match YOUR share/folder names
+  - /mnt/user/YOUR_SHARE/Media:/mnt/user/YOUR_SHARE/Media
+  - /mnt/cache/YOUR_SHARE/Media:/mnt/cache/YOUR_SHARE/Media
+```
+
+> **Important**: The `/var/local/emhttp` mount allows JellyCache-R to detect and spin up array disks before copying files. Without this, copies may fail when disks are sleeping.
+
+### 6. Test with dry-run
 
 ```bash
 # IMPORTANT: You must be in the directory containing docker-compose.yml
@@ -106,7 +128,7 @@ docker compose run --rm jellycache python plexcache_app.py --config /config/jell
 
 > **Troubleshooting**: If you get `no configuration file provided: not found`, you're either not in the correct directory or need to use `docker compose` (with space) instead of `docker-compose` (with hyphen).
 
-### 6. Run for real
+### 7. Run for real
 
 Once dry-run looks good:
 

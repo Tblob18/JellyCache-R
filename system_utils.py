@@ -78,19 +78,35 @@ class SystemDetector:
     def __init__(self):
         self.os_name = platform.system()
         self.is_linux = self.os_name != 'Windows'
-        self.is_unraid = self._detect_unraid()
         self.is_docker = self._detect_docker()
+        self.is_unraid = self._detect_unraid()
         
     def _detect_unraid(self) -> bool:
-        """Detect if running on Unraid system."""
-        os_info = {
-            'Linux': '/mnt/user0/',
-            'Darwin': None,
-            'Windows': None
-        }
+        """Detect if running on Unraid system or in Docker on Unraid.
         
-        unraid_path = os_info.get(self.os_name)
-        return os.path.exists(unraid_path) if unraid_path else False
+        Detection methods:
+        1. Native Unraid: Check for /mnt/user0/ (Unraid's direct disk access path)
+        2. Docker on Unraid: Check for disks.ini (requires mounting /var/local/emhttp/)
+        3. Docker on Unraid: Check for typical Unraid mount pattern (/mnt/user + /mnt/cache)
+        """
+        if self.os_name != 'Linux':
+            return False
+        
+        # Native Unraid detection
+        if os.path.exists('/mnt/user0/'):
+            return True
+        
+        # Docker on Unraid: check for disks.ini (mounted from host)
+        if os.path.exists('/var/local/emhttp/disks.ini'):
+            return True
+        
+        # Docker on Unraid: check for typical Unraid mount pattern
+        # Both /mnt/user and /mnt/cache should exist and be directories
+        if (os.path.isdir('/mnt/user') and os.path.isdir('/mnt/cache') and 
+            self.is_docker):
+            return True
+        
+        return False
     
     def _detect_docker(self) -> bool:
         """Detect if running inside a Docker container."""

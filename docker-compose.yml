@@ -11,6 +11,9 @@ services:
       # Logs directory
       - /mnt/user/appdata/jellycache/logs:/logs
       
+      # Unraid system info (for disk spin-up detection)
+      - /var/local/emhttp:/var/local/emhttp:ro
+      
       # Media directories - MUST match your path mappings
       # Array storage (where files currently live)
       - /mnt/user/Vault/Media:/mnt/user/Vault/Media
