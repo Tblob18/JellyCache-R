@@ -310,7 +310,21 @@ class FileUtils:
     def __init__(self, is_linux: bool, permissions: int = 0o777):
         self.is_linux = is_linux
         self.permissions = permissions
-        self.is_unraid = is_unraid_system()
+        # Detect Unraid for spin-up read feature
+        self.is_unraid = self._detect_unraid() if is_linux else False
+    
+    def _detect_unraid(self) -> bool:
+        """Detect if running on Unraid (same logic as SystemDetector)."""
+        # Native Unraid detection
+        if os.path.exists('/mnt/user0/'):
+            return True
+        # Docker on Unraid: check for disks.ini
+        if os.path.exists('/var/local/emhttp/disks.ini'):
+            return True
+        # Docker on Unraid: check for typical mount pattern
+        if os.path.isdir('/mnt/user') and os.path.isdir('/mnt/cache') and os.path.exists('/.dockerenv'):
+            return True
+        return False
     
     def check_path_exists(self, path: str) -> None:
         """Check if path exists, is a directory, and is writable."""
@@ -386,8 +400,9 @@ class FileUtils:
         Trigger disk spin-up by reading from the file.
         
         On Unraid with spun-down disks, accessing a file through /mnt/user/
-        will trigger the disk to spin up. We read a small chunk and wait
-        for the read to complete, which ensures the disk is ready.
+        will trigger the disk to spin up. We read multiple chunks from different
+        parts of the file to ensure we're actually hitting the disk, not just
+        a filesystem buffer.
         
         Args:
             file_path: Path to the file to read
@@ -401,11 +416,22 @@ class FileUtils:
         
         try:
             logging.debug(f"Triggering disk spin-up by reading from: {file_path}")
+            file_size = os.path.getsize(file_path)
+            
             with open(file_path, 'rb') as f:
-                # Read first 4KB - this triggers the disk spin-up
-                chunk = f.read(4096)
+                # Read 1MB from the start to force disk access
+                # Small reads might just come from filesystem buffers
+                chunk_size = min(1024 * 1024, file_size)  # 1MB or file size
+                chunk = f.read(chunk_size)
+                
+                # Also read from middle of file if large enough
+                # This ensures we're really hitting the disk
+                if file_size > 10 * 1024 * 1024:  # > 10MB
+                    f.seek(file_size // 2)
+                    f.read(4096)
+                
+                elapsed = time.time() - start_time
                 if len(chunk) > 0:
-                    elapsed = time.time() - start_time
                     if elapsed > 5:
                         logging.info(f"Disk spin-up completed after {elapsed:.1f}s for: {os.path.basename(file_path)}")
                     else:
@@ -442,8 +468,20 @@ class FileUtils:
                 src_gid = stat_info.st_gid
                 src_mode = stat_info.st_mode
 
-                # Copy the file (preserves metadata like timestamps)
-                shutil.copy2(src, dest)
+                # On Unraid, use native cp command - shutil.copy2 fails on FUSE
+                if self.is_unraid:
+                    import subprocess
+                    # Use cp with --preserve to maintain timestamps/permissions
+                    result = subprocess.run(
+                        ['cp', '--preserve=timestamps', src, dest],
+                        capture_output=True,
+                        text=True
+                    )
+                    if result.returncode != 0:
+                        raise RuntimeError(f"cp command failed: {result.stderr}")
+                else:
+                    # Copy the file (preserves metadata like timestamps)
+                    shutil.copy2(src, dest)
 
                 # Verify copy succeeded - check destination size matches source
                 dest_size = os.path.getsize(dest)
