@@ -380,11 +380,55 @@ class FileUtils:
         
         return size, unit
     
+    def _spin_up_read(self, file_path: str, timeout: int = 60) -> bool:
+        """
+        Trigger disk spin-up by reading from the file.
+        
+        On Unraid with spun-down disks, accessing a file through /mnt/user/
+        will trigger the disk to spin up. We read a small chunk and wait
+        for the read to complete, which ensures the disk is ready.
+        
+        Args:
+            file_path: Path to the file to read
+            timeout: Maximum seconds to wait for the read
+            
+        Returns:
+            True if read succeeded, False otherwise
+        """
+        import time
+        start_time = time.time()
+        
+        try:
+            logging.debug(f"Triggering disk spin-up by reading from: {file_path}")
+            with open(file_path, 'rb') as f:
+                # Read first 4KB - this triggers the disk spin-up
+                chunk = f.read(4096)
+                if len(chunk) > 0:
+                    elapsed = time.time() - start_time
+                    if elapsed > 5:
+                        logging.info(f"Disk spin-up completed after {elapsed:.1f}s for: {os.path.basename(file_path)}")
+                    else:
+                        logging.debug(f"File accessible (read {len(chunk)} bytes in {elapsed:.1f}s)")
+                    return True
+                else:
+                    logging.warning(f"Read 0 bytes from file: {file_path}")
+                    return False
+        except IOError as e:
+            elapsed = time.time() - start_time
+            logging.error(f"Failed to read file after {elapsed:.1f}s: {file_path} - {e}")
+            return False
+    
     def copy_file_with_permissions(self, src: str, dest: str, verbose: bool = False) -> int:
         """Copy a file preserving original ownership and permissions (Linux only)."""
         logging.debug(f"Copying file from {src} to {dest}")
 
         try:
+            # Trigger disk spin-up by reading from source before getting size
+            # This is especially important on Unraid where disks may be sleeping
+            if self.is_unraid:
+                if not self._spin_up_read(src):
+                    raise RuntimeError(f"Failed to access source file (disk may be unresponsive): {src}")
+            
             # Get source file size before copy for verification
             src_size = os.path.getsize(src)
             if src_size == 0:
