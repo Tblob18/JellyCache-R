@@ -310,6 +310,7 @@ class FileUtils:
     def __init__(self, is_linux: bool, permissions: int = 0o777):
         self.is_linux = is_linux
         self.permissions = permissions
+        self.is_unraid = is_unraid_system()
     
     def check_path_exists(self, path: str) -> None:
         """Check if path exists, is a directory, and is writable."""
