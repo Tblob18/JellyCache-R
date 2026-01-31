@@ -1373,35 +1373,25 @@ class PlexcachedMigration:
                 # Legacy fallback: simple string replacement
                 array_file = cache_file.replace(self.cache_dir, self.real_source, 1)
 
-            # On Unraid, check user0 (direct array) for .plexcached
-            # This is the authoritative location - .plexcached should be on array
-            if self.is_unraid:
-                array_file_user0 = array_file.replace("/mnt/user/", "/mnt/user0/", 1)
-                plexcached_file = array_file_user0 + PLEXCACHED_EXTENSION
-
-                # Check if .plexcached exists on array
-                if os.path.isfile(plexcached_file):
-                    logging.debug(f"Already has .plexcached backup: {cache_file}")
-                    continue
-
-                # Check if original exists on array (file wasn't cached yet)
-                if os.path.isfile(array_file_user0):
-                    logging.debug(f"Original exists on array, no migration needed: {cache_file}")
-                    continue
-
-                array_file_check = array_file_user0
+            # On Unraid, check user0 (direct array) for .plexcached if accessible
+            # /mnt/user0/ is the direct disk path (bypasses FUSE) - not available in Docker
+            use_user0 = self.is_unraid and os.path.isdir('/mnt/user0')
+            if use_user0:
+                array_file_check = array_file.replace("/mnt/user/", "/mnt/user0/", 1)
             else:
                 array_file_check = array_file
-                plexcached_file = array_file + PLEXCACHED_EXTENSION
+            
+            plexcached_file = array_file_check + PLEXCACHED_EXTENSION
 
-                # Check if .plexcached already exists OR original exists on array
-                if os.path.isfile(plexcached_file):
-                    logging.debug(f"Already has .plexcached backup: {cache_file}")
-                    continue
+            # Check if .plexcached exists on array
+            if os.path.isfile(plexcached_file):
+                logging.debug(f"Already has .plexcached backup: {cache_file}")
+                continue
 
-                if os.path.isfile(array_file_check):
-                    logging.debug(f"Original exists on array, no migration needed: {cache_file}")
-                    continue
+            # Check if original exists on array (file wasn't cached yet)
+            if os.path.isfile(array_file_check):
+                logging.debug(f"Original exists on array, no migration needed: {cache_file}")
+                continue
 
             # This file needs migration
             files_needing_migration.append((cache_file, array_file_check, plexcached_file))
@@ -2039,7 +2029,9 @@ class FileFilter:
         # Note: Retention period check is handled upstream in get_files_to_move_back_to_array()
         # which correctly distinguishes between TV shows (retention applies) and movies (no retention)
 
-        array_file = file.replace("/mnt/user/", "/mnt/user0/", 1) if self.is_unraid else file
+        # Use /mnt/user0/ if on Unraid AND accessible (not available in Docker)
+        use_user0 = self.is_unraid and os.path.isdir('/mnt/user0')
+        array_file = file.replace("/mnt/user/", "/mnt/user0/", 1) if use_user0 else file
         array_path = os.path.dirname(array_file)
 
         # Check if exact file already exists on array
@@ -2071,7 +2063,9 @@ class FileFilter:
 
     def _should_add_to_cache(self, file: str, cache_file_name: str) -> bool:
         """Determine if a file should be added to the cache."""
-        array_file = file.replace("/mnt/user/", "/mnt/user0/", 1) if self.is_unraid else file
+        # Use /mnt/user0/ if on Unraid AND accessible (not available in Docker)
+        use_user0 = self.is_unraid and os.path.isdir('/mnt/user0')
+        array_file = file.replace("/mnt/user/", "/mnt/user0/", 1) if use_user0 else file
 
         # Check if file already exists on cache
         if os.path.isfile(cache_file_name):
@@ -2728,8 +2722,10 @@ class FileMover:
             cache_path = os.path.join(self.cache_dir, relative_path)
             cache_file_name = os.path.join(cache_path, os.path.basename(file_to_move))
 
-        # Modify the user path if unraid is True
-        if self.is_unraid:
+        # Modify the user path if unraid is True AND /mnt/user0/ is accessible
+        # Note: /mnt/user0/ is Unraid's direct disk access path (bypasses FUSE)
+        # It's NOT available inside Docker containers - only the host can access it
+        if self.is_unraid and os.path.isdir('/mnt/user0'):
             user_path = user_path.replace("/mnt/user/", "/mnt/user0/", 1)
 
         # Get the user file name by joining the user path with the base name of the file to move
