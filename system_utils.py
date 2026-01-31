@@ -95,7 +95,199 @@ class SystemDetector:
     def _detect_docker(self) -> bool:
         """Detect if running inside a Docker container."""
         return os.path.exists('/.dockerenv')
+
+
+class UnraidDiskManager:
+    """Manages Unraid disk operations including spin-up detection and wake."""
     
+    DISKS_INI_PATH = '/var/local/emhttp/disks.ini'
+    
+    def __init__(self):
+        self.is_available = os.path.exists(self.DISKS_INI_PATH)
+        self._disk_status_cache = {}
+        self._cache_time = 0
+        self._cache_ttl = 5  # seconds
+    
+    def _parse_disks_ini(self) -> dict:
+        """Parse Unraid's disks.ini to get disk status information."""
+        import time
+        current_time = time.time()
+        
+        # Return cached result if still valid
+        if self._disk_status_cache and (current_time - self._cache_time) < self._cache_ttl:
+            return self._disk_status_cache
+        
+        disks = {}
+        if not os.path.exists(self.DISKS_INI_PATH):
+            return disks
+        
+        try:
+            current_disk = None
+            with open(self.DISKS_INI_PATH, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('[') and line.endswith(']'):
+                        current_disk = line[1:-1]
+                        disks[current_disk] = {}
+                    elif '=' in line and current_disk:
+                        key, value = line.split('=', 1)
+                        disks[current_disk][key.strip()] = value.strip().strip('"')
+            
+            self._disk_status_cache = disks
+            self._cache_time = current_time
+        except Exception as e:
+            logging.debug(f"Error parsing disks.ini: {e}")
+        
+        return disks
+    
+    def get_disk_for_file(self, file_path: str) -> Optional[str]:
+        """
+        Determine which Unraid disk a file resides on.
+        
+        For /mnt/user/ paths, checks each /mnt/disk*/ to find the actual location.
+        Returns the disk name (e.g., 'disk1') or None if not found.
+        """
+        # If it's already a /mnt/disk*/ path, extract the disk name
+        if file_path.startswith('/mnt/disk'):
+            parts = file_path.split('/')
+            if len(parts) >= 3:
+                return parts[2]  # e.g., 'disk1'
+        
+        # For /mnt/user/ paths, we need to find which disk has the file
+        if file_path.startswith('/mnt/user/'):
+            # Extract the path relative to /mnt/user/
+            relative_path = file_path[len('/mnt/user/'):]
+            
+            # Check each disk
+            try:
+                for entry in os.listdir('/mnt'):
+                    if entry.startswith('disk') and entry[4:].isdigit():
+                        disk_path = f'/mnt/{entry}/{relative_path}'
+                        if os.path.exists(disk_path):
+                            return entry
+            except OSError:
+                pass
+        
+        return None
+    
+    def is_disk_spun_up(self, disk_name: str) -> bool:
+        """
+        Check if a specific disk is spun up.
+        
+        Args:
+            disk_name: Name like 'disk1', 'disk2', etc.
+            
+        Returns:
+            True if spun up, False if spun down, True if status unknown (assume up)
+        """
+        disks = self._parse_disks_ini()
+        
+        if disk_name not in disks:
+            logging.debug(f"Disk {disk_name} not found in disks.ini, assuming spun up")
+            return True
+        
+        # Unraid uses 'spundown' field: '0' = spun up, '1' = spun down
+        spundown = disks[disk_name].get('spundown', '0')
+        is_up = spundown != '1'
+        
+        logging.debug(f"Disk {disk_name} spin status: {'up' if is_up else 'down'}")
+        return is_up
+    
+    def spin_up_disk(self, disk_name: str, timeout: int = 30) -> bool:
+        """
+        Spin up a disk by reading from it.
+        
+        Args:
+            disk_name: Name like 'disk1', 'disk2', etc.
+            timeout: Maximum seconds to wait for spin-up
+            
+        Returns:
+            True if disk is spun up, False on timeout
+        """
+        import time
+        
+        if self.is_disk_spun_up(disk_name):
+            return True
+        
+        logging.info(f"Spinning up {disk_name}...")
+        
+        # Find a file on the disk to read (triggers spin-up)
+        disk_path = f'/mnt/{disk_name}'
+        if not os.path.exists(disk_path):
+            logging.warning(f"Disk path not found: {disk_path}")
+            return False
+        
+        # Try to read the disk - this triggers spin-up
+        try:
+            # Reading the directory listing is enough to trigger spin-up
+            os.listdir(disk_path)
+        except OSError as e:
+            logging.warning(f"Error accessing {disk_path}: {e}")
+        
+        # Wait for spin-up with polling
+        start_time = time.time()
+        while (time.time() - start_time) < timeout:
+            # Clear cache to get fresh status
+            self._disk_status_cache = {}
+            
+            if self.is_disk_spun_up(disk_name):
+                elapsed = time.time() - start_time
+                logging.info(f"Disk {disk_name} spun up in {elapsed:.1f}s")
+                return True
+            
+            time.sleep(1)
+        
+        logging.warning(f"Timeout waiting for {disk_name} to spin up")
+        return False
+    
+    def ensure_disks_for_files(self, file_paths: list, timeout_per_disk: int = 30) -> dict:
+        """
+        Ensure all disks needed for the given files are spun up.
+        
+        Args:
+            file_paths: List of file paths to check
+            timeout_per_disk: Timeout in seconds for each disk spin-up
+            
+        Returns:
+            Dict mapping disk names to their spin-up status (True/False)
+        """
+        if not self.is_available:
+            logging.debug("Unraid disk management not available (not on Unraid or disks.ini missing)")
+            return {}
+        
+        # Find unique disks needed
+        disks_needed = set()
+        for file_path in file_paths:
+            disk = self.get_disk_for_file(file_path)
+            if disk:
+                disks_needed.add(disk)
+        
+        if not disks_needed:
+            logging.debug("No array disks identified for files")
+            return {}
+        
+        logging.debug(f"Files require disks: {', '.join(sorted(disks_needed))}")
+        
+        # Check and spin up each disk
+        results = {}
+        disks_to_spinup = []
+        
+        for disk in disks_needed:
+            if not self.is_disk_spun_up(disk):
+                disks_to_spinup.append(disk)
+        
+        if disks_to_spinup:
+            logging.info(f"Spinning up {len(disks_to_spinup)} disk(s): {', '.join(disks_to_spinup)}")
+            for disk in disks_to_spinup:
+                results[disk] = self.spin_up_disk(disk, timeout_per_disk)
+        else:
+            logging.debug("All required disks are already spun up")
+            for disk in disks_needed:
+                results[disk] = True
+        
+        return results
+
+
 class FileUtils:
     """Utility functions for file operations."""
     
@@ -177,6 +369,11 @@ class FileUtils:
         logging.debug(f"Copying file from {src} to {dest}")
 
         try:
+            # Get source file size before copy for verification
+            src_size = os.path.getsize(src)
+            if src_size == 0:
+                raise RuntimeError(f"Source file appears empty (0 bytes): {src}")
+
             if self.is_linux:
                 # Get source file ownership before copy
                 stat_info = os.stat(src)
@@ -186,6 +383,20 @@ class FileUtils:
 
                 # Copy the file (preserves metadata like timestamps)
                 shutil.copy2(src, dest)
+
+                # Verify copy succeeded - check destination size matches source
+                dest_size = os.path.getsize(dest)
+                if dest_size != src_size:
+                    # Remove failed copy
+                    try:
+                        os.remove(dest)
+                    except OSError:
+                        pass
+                    raise RuntimeError(
+                        f"Copy verification failed: size mismatch. "
+                        f"Source: {src_size} bytes, Destination: {dest_size} bytes. "
+                        f"This may indicate the source disk is spun down or unresponsive."
+                    )
 
                 # Restore original ownership (shutil.copy2 doesn't preserve uid/gid)
                 os.chown(dest, src_uid, src_gid)
@@ -203,6 +414,14 @@ class FileUtils:
                     logging.debug(f"File copied with permissions preserved: {dest}")
             else:  # Windows logic
                 shutil.copy2(src, dest)
+                # Verify on Windows too
+                dest_size = os.path.getsize(dest)
+                if dest_size != src_size:
+                    try:
+                        os.remove(dest)
+                    except OSError:
+                        pass
+                    raise RuntimeError(f"Copy verification failed: size mismatch.")
                 logging.debug(f"File copied (Windows): {src} -> {dest}")
 
             return 0

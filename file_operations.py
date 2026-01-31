@@ -14,6 +14,7 @@ from typing import List, Set, Optional, Tuple, Dict, TYPE_CHECKING, Any
 import re
 
 from logging_config import get_console_lock
+from system_utils import UnraidDiskManager
 
 if TYPE_CHECKING:
     from config import PathMapping
@@ -2608,6 +2609,8 @@ class FileMover:
         self.create_plexcached_backups = create_plexcached_backups
         self.hardlinked_files = hardlinked_files
         self._exclude_file_lock = threading.Lock()
+        # Unraid disk management for spin-up detection
+        self._disk_manager = UnraidDiskManager() if is_unraid else None
         # Progress tracking
         self._progress_lock = threading.Lock()
         self._completed_count = 0
@@ -2620,6 +2623,29 @@ class FileMover:
         self._source_map: Dict[str, str] = {}
         # Inode tracking: maps cache file paths to original array inodes (for hardlinked_files="copy")
         self._inode_map: Dict[str, int] = {}
+
+    def _ensure_disks_ready(self, file_paths: List[str], timeout_per_disk: int = 45) -> None:
+        """Ensure all Unraid array disks needed for the given files are spun up.
+        
+        This prevents 0-byte copy failures that occur when reading from spun-down
+        disks via Unraid's /mnt/user/ FUSE filesystem.
+        
+        Args:
+            file_paths: List of file paths that will be accessed
+            timeout_per_disk: Maximum seconds to wait for each disk to spin up
+        """
+        if not self._disk_manager or not self._disk_manager.is_available:
+            return
+        
+        results = self._disk_manager.ensure_disks_for_files(file_paths, timeout_per_disk)
+        
+        # Check for any disks that failed to spin up
+        failed_disks = [disk for disk, success in results.items() if not success]
+        if failed_disks:
+            logging.warning(
+                f"Some disks failed to spin up: {', '.join(failed_disks)}. "
+                f"File operations may fail or produce 0-byte copies."
+            )
 
     def move_media_files(self, files: List[str], destination: str,
                         max_concurrent_moves_array: int, max_concurrent_moves_cache: int,
@@ -2855,6 +2881,18 @@ class FileMover:
         total_count = len(move_commands)
         if total_count == 0:
             return
+
+        # Ensure required disks are spun up before starting (Unraid only)
+        # This prevents 0-byte copy failures when disks are sleeping
+        if destination == 'cache':
+            # For cache moves, we're reading from array disks
+            source_files = [cmd[0][0] for cmd in move_commands]  # cmd[0] is (src, dest) tuple
+            self._ensure_disks_ready(source_files)
+        elif destination == 'array':
+            # For array moves, we're writing to array (need .plexcached files accessible)
+            # The source is cache, but we need array disks for the .plexcached rename
+            dest_paths = [cmd[0][1] for cmd in move_commands]  # dest paths are array paths
+            self._ensure_disks_ready(dest_paths)
 
         # Initialize shared progress state for tqdm
         self._tqdm_pbar = None
