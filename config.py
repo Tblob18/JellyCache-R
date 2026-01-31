@@ -380,11 +380,22 @@ class ConfigManager:
         # Check if path_mappings is configured (makes legacy path fields optional)
         has_path_mappings = bool(self.settings_data.get('path_mappings'))
 
-        # Core required fields (always required)
+        # Check for Jellyfin credentials (support both new and legacy names)
+        has_jellyfin_url = 'jellyfin_url' in self.settings_data or 'PLEX_URL' in self.settings_data
+        has_api_key = 'api_key' in self.settings_data or 'PLEX_TOKEN' in self.settings_data
+        
+        if not has_jellyfin_url:
+            logging.error("Missing required field: jellyfin_url (or PLEX_URL)")
+            raise ValueError("Missing required field: jellyfin_url (or PLEX_URL)")
+        if not has_api_key:
+            logging.error("Missing required field: api_key (or PLEX_TOKEN)")
+            raise ValueError("Missing required field: api_key (or PLEX_TOKEN)")
+
+        # Core required fields (always required, excluding URL/token which are checked above)
         required_fields = [
-            'PLEX_URL', 'PLEX_TOKEN', 'number_episodes', 'valid_sections',
-            'days_to_monitor', 'users_toggle', 'watchlist_toggle',
-            'watchlist_episodes', 'watched_move', 'cache_dir',
+            'number_episodes', 'valid_sections',
+            'days_to_monitor', 'users_toggle',
+            'watched_move',
             'max_concurrent_moves_array', 'max_concurrent_moves_cache'
         ]
 
@@ -409,19 +420,28 @@ class ConfigManager:
         has_path_mappings = bool(self.settings_data.get('path_mappings'))
 
         # Core type checks (always validated)
+        # Support both new Jellyfin names and legacy Plex names
         type_checks = {
-            'PLEX_URL': str,
-            'PLEX_TOKEN': str,
             'number_episodes': int,
             'valid_sections': list,
             'days_to_monitor': int,
             'users_toggle': bool,
-            'watchlist_toggle': bool,
-            'watchlist_episodes': int,
             'watched_move': bool,
-            'cache_dir': str,
             'max_concurrent_moves_array': int,
             'max_concurrent_moves_cache': int,
+        }
+        
+        # Optional fields with type checks
+        optional_type_checks = {
+            'jellyfin_url': str,
+            'api_key': str,
+            'PLEX_URL': str,
+            'PLEX_TOKEN': str,
+            'watchlist_toggle': bool,
+            'favorites_toggle': bool,
+            'watchlist_episodes': int,
+            'favorites_episodes': int,
+            'cache_dir': str,
         }
 
         # Legacy path field types (only checked if path_mappings not configured)
@@ -435,6 +455,15 @@ class ConfigManager:
 
         type_errors = []
         for field, expected_type in type_checks.items():
+            if field in self.settings_data:
+                value = self.settings_data[field]
+                if not isinstance(value, expected_type):
+                    type_errors.append(
+                        f"'{field}' expected {expected_type.__name__}, got {type(value).__name__}"
+                    )
+        
+        # Check optional fields only if present
+        for field, expected_type in optional_type_checks.items():
             if field in self.settings_data:
                 value = self.settings_data[field]
                 if not isinstance(value, expected_type):
