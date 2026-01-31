@@ -36,3 +36,6 @@ test_*.json
 FUTURE_ENHANCEMENTS.md
 COMPLETED_ENHANCEMENTS.md
 MULTI_PATH_FEATURES.md
+
+# Test results (may contain sensitive info)
+TEST_RESULTS.md

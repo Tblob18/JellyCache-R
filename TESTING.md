@@ -1713,7 +1713,8 @@ pytest --collect-only
 
 - **Jellyfin API Documentation:** https://api.jellyfin.org/
 - **Python Testing:** https://docs.pytest.org/
-- **Original PlexCache-R:** https://github.com/StudioNirin/PlexCache-R
+- **JellyCache-R:** https://github.com/Tblob18/JellyCache-R
+- **Original PlexCache-R (upstream):** https://github.com/StudioNirin/PlexCache-R
 - **Issue Tracker:** https://github.com/Tblob18/JellyCache-R/issues
 
 ### Glossary

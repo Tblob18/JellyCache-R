@@ -27,8 +27,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from jellyfin_api import JellyfinManager
 
 # Test configuration
-JELLYFIN_URL = "https://jellyfin.dummyvault.de:443"
-API_KEY = "745f11baeb5945b2997615bacfde98c6"
+JELLYFIN_URL = "http://YOUR_JELLYFIN_IP:8096"
+API_KEY = "YOUR_API_KEY_HERE"
 
 
 def print_header(title):

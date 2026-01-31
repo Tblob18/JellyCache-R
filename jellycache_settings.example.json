@@ -9,6 +9,8 @@
     "skip_favorites": [],
     "favorites_toggle": true,
     "favorites_episodes": 3,
+    "watchlist_toggle": true,
+    "watchlist_episodes": 3,
     "watched_move": true,
     "cache_retention_hours": 72,
     "favorites_retention_days": 7,

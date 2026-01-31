@@ -123,7 +123,7 @@ This script comes without any warranties, guarantees, or magic powers. By using 
 
 **This is a fork of PlexCache-R**, modified to work with Jellyfin instead of Plex. Special thanks to:
 
-- The original PlexCache-R contributors at [StudioNirin/PlexCache-R](https://github.com/StudioNirin/PlexCache-R)
+- The original PlexCache-R contributors at [StudioNirin/PlexCache-R](https://github.com/StudioNirin/PlexCache-R) (upstream project)
 - brimur[^3] for providing the foundational script
 - bexem[^4] for early iterations
 - bbergle[^5] for major refactoring work

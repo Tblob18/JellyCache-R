@@ -1250,12 +1250,23 @@ def main():
     show_priorities = "--show-priorities" in sys.argv
     show_mappings = "--show-mappings" in sys.argv
 
-    # Derive config path from the script's actual location
-    script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
-    # Support both new name (jellycache_settings.json) and legacy name (plexcache_settings.json) for backwards compatibility
-    config_file = str(script_dir / "jellycache_settings.json")
-    if not os.path.exists(config_file):
-        config_file = str(script_dir / "plexcache_settings.json")
+    # Check for --config argument
+    config_file = None
+    for i, arg in enumerate(sys.argv):
+        if arg == "--config" and i + 1 < len(sys.argv):
+            config_file = sys.argv[i + 1]
+            break
+        elif arg.startswith("--config="):
+            config_file = arg.split("=", 1)[1]
+            break
+
+    # If no --config provided, derive from script's location (for backwards compatibility)
+    if not config_file:
+        script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+        # Support both new name (jellycache_settings.json) and legacy name (plexcache_settings.json) for backwards compatibility
+        config_file = str(script_dir / "jellycache_settings.json")
+        if not os.path.exists(config_file):
+            config_file = str(script_dir / "plexcache_settings.json")
 
     # Handle emergency restore mode
     if restore_plexcached:
