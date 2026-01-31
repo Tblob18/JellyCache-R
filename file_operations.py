@@ -2980,6 +2980,13 @@ class FileMover:
         array_path = os.path.dirname(array_file)
 
         try:
+            # Capture source file size early, before any FUSE operations
+            # (Unraid's /mnt/user/ may not reflect changes immediately with spun-down disks)
+            try:
+                source_file_size = os.path.getsize(array_file)
+            except OSError:
+                source_file_size = 0
+
             # Step 0a: Check for hard links if not treating as normal files
             original_inode = None
             is_hardlinked = False
@@ -3060,8 +3067,7 @@ class FileMover:
 
             # Log successful move using tqdm.write to avoid progress bar interference
             from tqdm import tqdm
-            file_size = os.path.getsize(cache_file_name)
-            size_str = format_bytes(file_size)
+            size_str = format_bytes(source_file_size)
             with get_console_lock():
                 tqdm.write(f"Successfully cached: {os.path.basename(cache_file_name)} ({size_str})")
 
