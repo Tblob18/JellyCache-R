@@ -1,11 +1,57 @@
 {% extends "settings/index.html" %}
 
 {% block settings_content %}
+{% set server = settings.media_server | default('plex') %}
 <form hx-put="/settings/plex" hx-target="#settings-alert-container" hx-swap="innerHTML">
 <div class="card">
     <div class="card-header">
+        <i data-lucide="server"></i>
+        <h2>Media Server</h2>
+    </div>
+    <div class="card-body">
+        <div class="server-choice" data-setting-id="media_server">
+            <label class="server-option">
+                <input type="radio" name="media_server" value="plex" {% if server != 'jellyfin' %}checked{% endif %}>
+                <span><strong>Plex</strong><small>On Deck + Watchlist</small></span>
+            </label>
+            <label class="server-option">
+                <input type="radio" name="media_server" value="jellyfin" {% if server == 'jellyfin' %}checked{% endif %}>
+                <span><strong>Jellyfin</strong><small>Continue Watching, Next Up + Favorites</small></span>
+            </label>
+        </div>
+        <div class="form-hint server-hint">Save after switching, then re-check <a href="/settings/libraries">Libraries</a> and <a href="/settings/users">Users</a> - they come from the selected server.</div>
+    </div>
+</div>
+
+<div class="card server-panel" data-server="jellyfin" {% if server != 'jellyfin' %}hidden{% endif %}>
+    <div class="card-header">
         <i data-lucide="link"></i>
-        <h2>Server Connection</h2>
+        <h2>Jellyfin Connection</h2>
+    </div>
+    <div class="card-body">
+        <div class="grid grid-2">
+            <div class="form-group" data-setting-id="jellyfin_url">
+                <label for="jellyfin_url">Jellyfin URL</label>
+                <input type="text" id="jellyfin_url" name="jellyfin_url"
+                       value="{{ settings.jellyfin_url | default('') }}"
+                       placeholder="http://192.168.1.10:8096">
+                <div class="form-hint">Use the LAN IP - <code>localhost</code> inside Docker is the container itself.</div>
+            </div>
+            <div class="form-group mb-0" data-setting-id="jellyfin_api_key">
+                <label for="jellyfin_api_key">API Key</label>
+                <input type="password" id="jellyfin_api_key" name="jellyfin_api_key"
+                       value="{{ settings.jellyfin_api_key | default('') }}"
+                       placeholder="Jellyfin API key" autocomplete="off">
+                <div class="form-hint">Jellyfin Dashboard &rsaquo; API Keys &rsaquo; <strong>+</strong>. One key covers all users.</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card server-panel" data-server="plex" {% if server == 'jellyfin' %}hidden{% endif %}>
+    <div class="card-header">
+        <i data-lucide="link"></i>
+        <h2>Plex Connection</h2>
     </div>
     <div class="card-body">
         <div class="grid grid-2">
@@ -13,7 +59,7 @@
                 <label for="plex_url">Plex URL</label>
                 <input type="text" id="plex_url" name="plex_url"
                        value="{{ settings.plex_url | default('http://localhost:32400') }}"
-                       placeholder="http://localhost:32400" required>
+                       placeholder="http://localhost:32400">
             </div>
 
             <div class="form-group mb-0" data-setting-id="plex_token">
@@ -21,7 +67,7 @@
                 <div class="flex gap-1">
                     <input type="password" id="plex_token" name="plex_token"
                            value="{{ settings.plex_token | default('') }}"
-                           placeholder="Your Plex token" style="flex: 1;" required>
+                           placeholder="Your Plex token" style="flex: 1;">
                     <button type="button" class="btn btn-secondary oauth-btn" data-setting-id="plex_oauth_btn" onclick="startPlexOAuth()" title="Sign in with Plex to get token automatically">
                         <i data-lucide="key"></i>
                         <span>Get Token</span>
@@ -77,6 +123,15 @@
 </div>
 
 <script>
+    // Show the connection panel for the selected media server.
+    document.querySelectorAll('input[name="media_server"]').forEach(function (radio) {
+        radio.addEventListener('change', function () {
+            document.querySelectorAll('.server-panel').forEach(function (panel) {
+                panel.hidden = panel.dataset.server !== radio.value;
+            });
+        });
+    });
+
     // Plex OAuth flow (server-side)
     let oauthWindow = null;
     let oauthPollInterval = null;

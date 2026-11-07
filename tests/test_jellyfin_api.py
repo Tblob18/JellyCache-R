@@ -183,3 +183,29 @@ def test_connect_failure_raises(routes):
     routes["/System/Info"] = boom
     with pytest.raises(ConnectionError):
         FakeJellyfin(routes).connect()
+
+
+def test_library_filter_accepts_integer_section_id(jf):
+    from core.jellyfin_api import jellyfin_section_id
+    sid = jellyfin_section_id("lib-movies")
+    assert 0 < sid < 2**31
+    items = jf.get_on_deck_media([sid], 7, 0, True, [])
+    paths = {i.file_path for i in items}
+    assert paths == {"/media/movies/Film.mkv"}
+    assert {lib["section_id"] for lib in jf.get_libraries()} == {
+        jellyfin_section_id(x) for x in ("lib-movies", "lib-tv", "lib-home")}
+
+
+def test_on_deck_source_detail(jf):
+    items = {i.file_path: i for i in jf.get_on_deck_media([], 7, 1, True, [])}
+    assert items["/media/movies/Film.mkv"].source_detail == "continue_watching"
+    assert items["/media/tv/Show/S01E03.mkv"].source_detail == "continue_watching"
+    nxt = items["/media/tv/Show/S01E04.mkv"]
+    assert nxt.source_detail == "prefetch" and nxt.related_title == "Show S01E03"
+
+
+def test_list_users(jf):
+    assert jf.list_users() == [
+        {"name": "admin", "id": "u1", "is_admin": True},
+        {"name": "kid", "id": "u2", "is_admin": False},
+    ]

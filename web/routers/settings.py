@@ -76,7 +76,7 @@ def settings_index(request: Request):
 
 @router.get("/plex", response_class=HTMLResponse)
 def settings_plex(request: Request):
-    """Plex Server connection settings tab"""
+    """Media server connection settings tab"""
     settings_service = get_settings_service()
     settings = settings_service.get_plex_settings()
 
@@ -84,7 +84,7 @@ def settings_plex(request: Request):
         request,
         "settings/plex.html",
         {
-            "page_title": "Plex Server Settings",
+            "page_title": "Media Server Settings",
             "active_tab": "plex",
             "settings": settings,
         }
@@ -132,6 +132,13 @@ def test_plex_connection(request: Request):
     """Test Plex connection and return detailed status"""
     settings_service = get_settings_service()
     settings = settings_service.get_plex_settings()
+
+    if settings.get("media_server") == "jellyfin":
+        result = settings_service.test_jellyfin_connection(
+            settings.get("jellyfin_url", ""), settings.get("jellyfin_api_key", ""))
+        return templates.TemplateResponse(
+            request, "partials/alert.html",
+            {"type": "success" if result["success"] else "error", "message": result["message"]})
 
     plex_url = settings.get("plex_url", "")
     plex_token = settings.get("plex_token", "")
@@ -181,15 +188,30 @@ def test_plex_connection(request: Request):
 
 @router.put("/plex", response_class=HTMLResponse)
 def save_plex_settings(request: Request, form_data: ImmutableMultiDict = Depends(parse_form)):
-    """Save Plex Server connection settings (URL + token only)"""
+    """Save media server connection settings (Plex URL + token, or Jellyfin URL + API key)"""
     settings_service = get_settings_service()
 
-    plex_url = form_data.get("plex_url", "")
-    plex_token = form_data.get("plex_token", "")
+    media_server = (form_data.get("media_server", "plex") or "plex").strip().lower()
+    if media_server not in ("plex", "jellyfin"):
+        media_server = "plex"
+    plex_url = form_data.get("plex_url", "").strip()
+    plex_token = form_data.get("plex_token", "").strip()
+    jellyfin_url = form_data.get("jellyfin_url", "").strip()
+    jellyfin_api_key = form_data.get("jellyfin_api_key", "").strip()
+
+    missing = ([] if (jellyfin_url and jellyfin_api_key) else ["Jellyfin URL and API key"]) \
+        if media_server == "jellyfin" else ([] if (plex_url and plex_token) else ["Plex URL and token"])
+    if missing:
+        return templates.TemplateResponse(
+            request, "partials/alert.html",
+            {"type": "error", "message": f"Missing {missing[0]}"})
 
     success = settings_service.save_plex_settings({
+        "media_server": media_server,
         "plex_url": plex_url,
         "plex_token": plex_token,
+        "jellyfin_url": jellyfin_url,
+        "jellyfin_api_key": jellyfin_api_key,
     })
 
     if success:
@@ -223,8 +245,11 @@ def settings_users(request: Request):
     user_settings = settings_service.get_user_settings()
     plex_settings = settings_service.get_plex_settings()
 
-    # Check if Plex is configured
-    has_plex_config = bool(plex_settings.get("plex_url") and plex_settings.get("plex_token"))
+    # Check if the media server is configured
+    if plex_settings.get("media_server") == "jellyfin":
+        has_plex_config = bool(plex_settings.get("jellyfin_url") and plex_settings.get("jellyfin_api_key"))
+    else:
+        has_plex_config = bool(plex_settings.get("plex_url") and plex_settings.get("plex_token"))
 
     return templates.TemplateResponse(
         request,

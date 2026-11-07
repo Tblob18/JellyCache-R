@@ -93,11 +93,35 @@ def setup_wizard(request: Request, step: int = 1):
         "settings": settings,
     }
 
+    is_jellyfin = str(settings.get("media_server", "plex")).strip().lower() == "jellyfin"
+    context["is_jellyfin"] = is_jellyfin
+    jf_url = settings.get("JELLYFIN_URL", "")
+    jf_key = settings.get("JELLYFIN_API_KEY", "")
+
     # Add step-specific data
     if step == 2:
-        # Plex connection - check for existing values
+        # Media server connection - check for existing values
         context["plex_url"] = settings.get("PLEX_URL", "")
         context["plex_token"] = settings.get("PLEX_TOKEN", "")
+        context["jellyfin_url"] = jf_url
+        context["jellyfin_api_key"] = jf_key
+
+    elif step == 3 and is_jellyfin:
+        if "_cached_libraries" not in _setup_state:
+            _setup_state["_cached_libraries"] = settings_service.get_jellyfin_libraries(jf_url, jf_key)
+        context["libraries"] = _setup_state["_cached_libraries"]
+        context["valid_sections"] = settings.get("valid_sections", [])
+        context["library_cacheable"] = settings.get("library_cacheable", {})
+        context["cache_dir"] = settings.get("cache_dir", "/mnt/cache")
+        context["path_mappings"] = settings.get("path_mappings", [])
+
+    elif step == 4 and is_jellyfin:
+        if "_cached_users" not in _setup_state:
+            _setup_state["_cached_users"] = settings_service.get_jellyfin_users(jf_url, jf_key)
+        context["users"] = _setup_state["_cached_users"]
+        context["users_toggle"] = settings.get("users_toggle", True)
+        context["existing_users"] = settings.get("users", [])
+        context["remote_watchlist_rss_url"] = ""
 
     elif step == 3:
         # Libraries - use cached data if available, otherwise fetch from Plex
@@ -159,10 +183,14 @@ def setup_wizard(request: Request, step: int = 1):
 
     elif step == 7:
         # Summary - gather all configured settings from setup state
-        context["plex_url"] = settings.get("PLEX_URL", "")
+        context["plex_url"] = jf_url if is_jellyfin else settings.get("PLEX_URL", "")
         context["libraries_count"] = len(settings.get("valid_sections", []))
         context["path_mappings_count"] = len(settings.get("path_mappings", []))
-        context["users_count"] = len(settings.get("users", [])) + 1  # +1 for main account
+        if is_jellyfin:
+            context["users_count"] = len([u for u in settings.get("users", [])
+                                          if not (u.get("skip_ondeck") and u.get("skip_watchlist"))])
+        else:
+            context["users_count"] = len(settings.get("users", [])) + 1  # +1 for main account
         context["auth_enabled"] = settings.get("auth_enabled", False)
 
     return templates.TemplateResponse(request, f"setup/step{step}.html", context)
@@ -177,10 +205,35 @@ def setup_step1_post(request: Request):
 @router.post("/setup/step2", response_class=HTMLResponse)
 def setup_step2_post(
     request: Request,
-    plex_url: str = Form(...),
-    plex_token: str = Form(...)
+    plex_url: str = Form(""),
+    plex_token: str = Form(""),
+    media_server: str = Form("plex"),
+    jellyfin_url: str = Form(""),
+    jellyfin_api_key: str = Form(""),
 ):
-    """Handle step 2 (Plex Connection) form submission"""
+    """Handle step 2 (media server connection) form submission"""
+    if media_server.strip().lower() == "jellyfin":
+        jellyfin_url = jellyfin_url.strip().rstrip("/")
+        jellyfin_api_key = jellyfin_api_key.strip()
+        settings_service = get_settings_service()
+        result = settings_service.test_jellyfin_connection(jellyfin_url, jellyfin_api_key)
+        if not result["success"]:
+            return templates.TemplateResponse(request, "setup/step2.html", {
+                "page_title": "Setup", "step": 2, "total_steps": 7, "is_jellyfin": True,
+                "plex_url": plex_url, "plex_token": plex_token,
+                "jellyfin_url": jellyfin_url, "jellyfin_api_key": jellyfin_api_key,
+                "error": result["message"],
+            })
+        update_setup_state({
+            "media_server": "jellyfin",
+            "JELLYFIN_URL": jellyfin_url,
+            "JELLYFIN_API_KEY": jellyfin_api_key,
+        })
+        for key in ("_cached_libraries", "_cached_users", "_prefetched_user_tokens"):
+            _setup_state.pop(key, None)
+        return RedirectResponse(url="/setup?step=3", status_code=303)
+
+    update_setup_state({"media_server": "plex"})
     # Validate connection before storing in memory
     try:
         from plexapi.server import PlexServer
@@ -197,6 +250,8 @@ def setup_step2_post(
                 "total_steps": 7,
                 "plex_url": plex_url,
                 "plex_token": plex_token,
+                "jellyfin_url": jellyfin_url,
+                "jellyfin_api_key": jellyfin_api_key,
                 "error": f"Could not connect to Plex: {str(e)}"
             }
         )
@@ -334,7 +389,24 @@ def setup_step4_post(request: Request, form_data: ImmutableMultiDict = Depends(p
 
     # Build user list - prefer prefetched tokens for speed
     users = []
-    if users_toggle:
+    is_jellyfin = _setup_state.get("media_server") == "jellyfin"
+    if is_jellyfin:
+        # Jellyfin tracks every server user unless skipped, so record all of
+        # them: unticked users are kept with both lists skipped.
+        jf_users = _setup_state.get("_cached_users") or get_settings_service().get_jellyfin_users(
+            _setup_state.get("JELLYFIN_URL", ""), _setup_state.get("JELLYFIN_API_KEY", ""))
+        for u in jf_users:
+            name = u["username"]
+            selected = (form_data.get(f"user_{name}") == "on") if users_toggle else bool(u.get("is_admin"))
+            users.append({
+                "title": u["title"],
+                "id": u.get("jellyfin_id"),
+                "is_local": True,
+                "is_admin": u.get("is_admin", False),
+                "skip_ondeck": (not selected) or form_data.get(f"skip_ondeck_{name}") == "on",
+                "skip_watchlist": (not selected) or form_data.get(f"skip_watchlist_{name}") == "on",
+            })
+    elif users_toggle:
         prefetched_tokens = _setup_state.get("_prefetched_user_tokens", {})
 
         if prefetched_tokens:
@@ -648,6 +720,14 @@ def oauth_poll(client_id: str = Query(...)):
 
     except requests.RequestException as e:
         return JSONResponse({"success": False, "error": str(e)})
+
+
+@router.post("/setup/test-jellyfin")
+def setup_test_jellyfin(jellyfin_url: str = Form(""), jellyfin_api_key: str = Form("")):
+    """Test a Jellyfin URL + API key from the setup wizard (JSON)."""
+    result = get_settings_service().test_jellyfin_connection(
+        jellyfin_url.strip().rstrip("/"), jellyfin_api_key.strip())
+    return JSONResponse(result)
 
 
 @router.post("/setup/test-connection")

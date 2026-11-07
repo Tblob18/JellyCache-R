@@ -31,31 +31,33 @@
                     </button>
                 </div>
                 <p class="help-text" style="margin-bottom: 0.75rem;">
-                    Your main account is always included. Select additional users below.
+                    {% if is_jellyfin %}Select the Jellyfin users whose Continue Watching and Favorites should be cached.
+                    Unselected users are kept in the list but not tracked.
+                    {% else %}Your main account is always included. Select additional users below.{% endif %}
                 </p>
 
                 <div class="checkbox-group" id="user-checkboxes">
                     {% for user in users %}
-                    {% if not user.is_admin %}
+                    {% if is_jellyfin or not user.is_admin %}
                     <div class="checkbox-item" style="flex-direction: column; align-items: stretch;">
                         <div style="display: flex; align-items: center; gap: 0.75rem;">
                             <input type="checkbox" name="user_{{ user.username }}" id="user_{{ user.username }}"
-                                   {% if user.username in (existing_users | map(attribute='title') | list) %}checked{% endif %}>
+                                   {% if (is_jellyfin and (user.username not in (existing_users | map(attribute='title') | list) or not (existing_users | selectattr('title', 'equalto', user.username) | map(attribute='skip_ondeck') | first))) or (not is_jellyfin and user.username in (existing_users | map(attribute='title') | list)) %}checked{% endif %}>
                             <div class="checkbox-label">
                                 <strong>{{ user.title }}</strong>
-                                <span>{% if user.is_home %}Home User{% else %}Friend/Remote{% endif %}</span>
+                                <span>{% if is_jellyfin %}{{ 'Administrator' if user.is_admin else 'User' }}{% elif user.is_home %}Home User{% else %}Friend/Remote{% endif %}</span>
                             </div>
                         </div>
 
                         <div style="margin-left: 2rem; margin-top: 0.5rem; display: flex; gap: 1rem; font-size: 0.85rem;">
                             <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
                                 <input type="checkbox" name="skip_ondeck_{{ user.username }}">
-                                <span style="color: var(--text-secondary);">Skip OnDeck</span>
+                                <span style="color: var(--text-secondary);">Skip {{ 'Continue Watching' if is_jellyfin else 'OnDeck' }}</span>
                             </label>
-                            {% if user.is_home %}
+                            {% if is_jellyfin or user.is_home %}
                             <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
                                 <input type="checkbox" name="skip_watchlist_{{ user.username }}">
-                                <span style="color: var(--text-secondary);">Skip Watchlist</span>
+                                <span style="color: var(--text-secondary);">Skip {{ 'Favorites' if is_jellyfin else 'Watchlist' }}</span>
                             </label>
                             {% else %}
                             <span style="color: var(--text-muted);">(Watchlist via RSS for remote users)</span>
@@ -82,6 +84,7 @@
             </div>
         </div>
 
+        {% if not is_jellyfin %}
         <!-- RSS URL for Remote Watchlist Support -->
         <div style="margin-top: 1rem; background: rgba(229, 160, 13, 0.1); border: 1px solid rgba(229, 160, 13, 0.3); border-radius: var(--plex-radius-sm); padding: 1rem;">
             <div style="display: flex; align-items: flex-start; gap: 0.75rem; margin-bottom: 0.75rem;">
@@ -105,6 +108,7 @@
                 <p class="help-text" style="margin-top: 0.25rem;">Leave blank to skip - you can add this later in Settings.</p>
             </div>
         </div>
+        {% endif %}
     </div>
 
     <div class="setup-footer">
@@ -188,8 +192,8 @@
             updateSelectAllButton();
         }
 
-        // Prefetch user tokens in background for faster step 5 transition
-        prefetchUserTokens();
+        // Prefetch user tokens in background for faster step 5 transition (Plex only)
+        {% if not is_jellyfin %}prefetchUserTokens();{% endif %}
     });
 
     // Prefetch tokens while user is selecting users (background operation)

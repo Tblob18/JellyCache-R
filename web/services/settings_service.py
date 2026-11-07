@@ -177,6 +177,9 @@ class SettingsService:
         """Get Plex-related settings"""
         raw = self._load_raw()
         return {
+            "media_server": str(raw.get("media_server") or "plex").strip().lower(),
+            "jellyfin_url": raw.get("JELLYFIN_URL", ""),
+            "jellyfin_api_key": raw.get("JELLYFIN_API_KEY", ""),
             "plex_url": raw.get("PLEX_URL", ""),
             "plex_token": raw.get("PLEX_TOKEN", ""),
             "valid_sections": raw.get("valid_sections", []),
@@ -199,6 +202,15 @@ class SettingsService:
 
         raw["PLEX_URL"] = new_url
         raw["PLEX_TOKEN"] = new_token
+        old_jf = (raw.get("media_server"), raw.get("JELLYFIN_URL"), raw.get("JELLYFIN_API_KEY"))
+        if "media_server" in settings:
+            raw["media_server"] = settings["media_server"]
+        if "jellyfin_url" in settings:
+            raw["JELLYFIN_URL"] = settings["jellyfin_url"].strip().rstrip("/")
+        if "jellyfin_api_key" in settings:
+            raw["JELLYFIN_API_KEY"] = settings["jellyfin_api_key"].strip()
+        if old_jf != (raw.get("media_server"), raw.get("JELLYFIN_URL"), raw.get("JELLYFIN_API_KEY")):
+            old_url = None  # force cache invalidation below
         if "valid_sections" in settings:
             raw["valid_sections"] = settings["valid_sections"]
         if "days_to_monitor" in settings:
@@ -940,6 +952,123 @@ class SettingsService:
         self._plex_users_cache = None
         self._plex_cache_time = None
 
+    # ------------------------------------------------------------------
+    # Jellyfin (media_server == "jellyfin")
+    # ------------------------------------------------------------------
+
+    def is_jellyfin(self) -> bool:
+        return self.get_plex_settings().get("media_server") == "jellyfin"
+
+    @staticmethod
+    def _jellyfin_manager(url: str, api_key: str):
+        from core.jellyfin_api import JellyfinManager
+        manager = JellyfinManager(url, api_key, retry_limit=1, timeout=10)
+        manager.connect()
+        return manager
+
+    def test_jellyfin_connection(self, url: str, api_key: str) -> Dict[str, Any]:
+        """{"success", "message"} - connect, then list users to prove the key works."""
+        if not url or not api_key:
+            return {"success": False, "message": "Enter the Jellyfin URL and an API key first."}
+        try:
+            manager = self._jellyfin_manager(url, api_key)
+            users = manager.list_users()
+            libraries = manager.get_libraries()
+            name = manager.server_name or url
+            version = f" {manager.server_version}" if manager.server_version else ""
+            return {"success": True,
+                    "message": f"Connected to Jellyfin '{name}'{version} - "
+                               f"{len(libraries)} libraries, {len(users)} users"}
+        except Exception as e:
+            text = str(e)
+            if "401" in text or "Unauthorized" in text:
+                hint = "API key rejected. Create one in Jellyfin: Dashboard > API Keys."
+            elif "refused" in text or "Errno 111" in text:
+                hint = "Connection refused. Is Jellyfin running? Use the LAN IP, e.g. http://192.168.x.x:8096"
+            elif "timed out" in text.lower():
+                hint = "Connection timed out. From Docker, use the host's LAN IP rather than localhost."
+            else:
+                hint = f"Error: {text[:150]}"
+            return {"success": False, "message": hint}
+
+    def get_jellyfin_libraries(self, url: Optional[str] = None,
+                               api_key: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Jellyfin libraries in the same shape get_plex_libraries() returns."""
+        if url is None or api_key is None:
+            saved = self.get_plex_settings()
+            url, api_key = url or saved.get("jellyfin_url", ""), api_key or saved.get("jellyfin_api_key", "")
+        if not url or not api_key:
+            return []
+        type_map = {"movies": ("movie", "Movies"), "tvshows": ("show", "TV Shows"),
+                    "music": ("artist", "Music"), "homevideos": ("movie", "Home Videos"),
+                    "musicvideos": ("movie", "Music Videos"), "boxsets": ("movie", "Collections")}
+        try:
+            manager = self._jellyfin_manager(url, api_key)
+        except Exception as e:
+            self._last_plex_error = f"Jellyfin: {e}"
+            return []
+        libraries = []
+        for lib in manager.get_libraries():
+            kind, label = type_map.get((lib.get("type") or "").lower(), ("movie", "Mixed"))
+            libraries.append({
+                "id": lib["section_id"],
+                "title": lib["name"],
+                "type": kind,
+                "type_label": label,
+                "locations": [loc.rstrip("/") for loc in lib.get("locations", [])],
+                "jellyfin_id": lib["id"],
+            })
+        return sorted(libraries, key=lambda x: x["title"].lower())
+
+    def get_jellyfin_users(self, url: Optional[str] = None,
+                           api_key: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Jellyfin users in the same shape get_plex_users() returns."""
+        if url is None or api_key is None:
+            saved = self.get_plex_settings()
+            url, api_key = url or saved.get("jellyfin_url", ""), api_key or saved.get("jellyfin_api_key", "")
+        if not url or not api_key:
+            self._last_plex_error = "Missing Jellyfin URL or API key"
+            return []
+        try:
+            users = self._jellyfin_manager(url, api_key).list_users()
+        except Exception as e:
+            self._last_plex_error = f"Jellyfin: {e}"
+            return []
+        self._last_plex_error = None
+        users.sort(key=lambda u: (not u["is_admin"], u["name"].lower()))
+        return [{"username": u["name"], "title": u["name"], "is_admin": u["is_admin"],
+                 "is_home": True, "jellyfin_id": u["id"]} for u in users]
+
+    def _sync_users_from_jellyfin(self) -> Dict[str, Any]:
+        users = self.get_jellyfin_users()
+        if not users:
+            return {"success": False, "error": self._last_plex_error or "No users returned by Jellyfin"}
+        raw = self._load_raw()
+        existing = {u.get("title"): u for u in raw.get("users", [])}
+        new_users, added = [], 0
+        for u in users:
+            prev = existing.get(u["title"], {})
+            if not prev:
+                added += 1
+            entry = {
+                "title": u["title"],
+                "id": u["jellyfin_id"],
+                "is_local": True,
+                "is_admin": u["is_admin"],
+                "skip_ondeck": prev.get("skip_ondeck", False),
+                "skip_watchlist": prev.get("skip_watchlist", False),
+            }
+            for key in ("days_to_monitor", "watchlist_retention_days"):
+                if key in prev:
+                    entry[key] = prev[key]
+            new_users.append(entry)
+        removed = len(set(existing) - {u["title"] for u in new_users})
+        raw["users"] = new_users
+        raw["skip_ondeck"] = [u["title"] for u in new_users if u.get("skip_ondeck")]
+        raw["skip_watchlist"] = [u["title"] for u in new_users if u.get("skip_watchlist")]
+        self._save_raw(raw)
+        return {"success": True, "users": new_users, "added_count": added, "removed_count": removed}
+
     def get_plex_libraries(self, plex_url: Optional[str] = None, plex_token: Optional[str] = None) -> List[Dict[str, Any]]:
         """Fetch library sections from Plex server (cached)
 
@@ -947,6 +1076,8 @@ class SettingsService:
             plex_url: Optional Plex URL (uses saved settings if not provided)
             plex_token: Optional Plex token (uses saved settings if not provided)
         """
+        if plex_url is None and plex_token is None and self.is_jellyfin():
+            return self.get_jellyfin_libraries()
         with self._cache_lock:
             # Return cached data if valid (only when using saved credentials)
             if plex_url is None and plex_token is None:
@@ -1007,6 +1138,8 @@ class SettingsService:
             plex_url: Optional Plex URL (uses saved settings if not provided)
             plex_token: Optional Plex token (uses saved settings if not provided)
         """
+        if plex_url is None and plex_token is None and self.is_jellyfin():
+            return self.get_jellyfin_users()
         # Check for prefetched users from setup wizard (background fetch)
         if hasattr(self, '_prefetched_users') and self._prefetched_users:
             prefetched = self._prefetched_users
@@ -1190,6 +1323,8 @@ class SettingsService:
         Returns:
             Dict with: success, users, added_count, removed_count, error
         """
+        if self.is_jellyfin():
+            return self._sync_users_from_jellyfin()
         settings = self.get_plex_settings()
         plex_url = settings.get("plex_url", "")
         plex_token = settings.get("plex_token", "")

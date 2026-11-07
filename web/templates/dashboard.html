@@ -28,6 +28,7 @@
     {% include "partials/dashboard_skeleton.html" %}
 </div>
 
+{% if media_server() != 'jellyfin' %}
 <!-- Recently Added (visibility into new media + where it lives) -->
 <div class="card">
     <div class="card-header">
@@ -48,6 +49,8 @@
         </div>
     </div>
 </div>
+
+{% endif %}
 
 <!-- Recent Activity (Last 24 Hours) -->
 <div class="card">

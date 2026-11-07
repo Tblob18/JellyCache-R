@@ -3185,3 +3185,14 @@ footer .version {
         margin-top: 0.5rem;
     }
 }
+
+/* ===================== Media server choice ===================== */
+.server-choice { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: .75rem; margin-bottom: .5rem; }
+.server-option { display: flex; gap: .75rem; align-items: center; padding: .9rem 1rem; cursor: pointer;
+  border: 1px solid var(--plex-border); border-radius: var(--plex-radius-lg, 10px); background: var(--plex-bg-input); }
+.server-option:hover { border-color: var(--plex-border-light); }
+.server-option:has(input:checked) { border-color: var(--plex-orange); box-shadow: 0 0 0 1px var(--plex-orange) inset; }
+.server-option span { display: flex; flex-direction: column; gap: .1rem; }
+.server-option small { color: var(--plex-text-muted); font-size: .78rem; }
+.server-panel[hidden] { display: none; }
+.server-hint a { color: var(--plex-orange-text); }
