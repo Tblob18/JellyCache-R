@@ -1,0 +1,99 @@
+{
+    "_comment": "JellyCache-R (Jellyfin) example settings - see docs/JELLYFIN.md",
+    "media_server": "jellyfin",
+    "JELLYFIN_URL": "http://192.168.1.100:8096",
+    "JELLYFIN_API_KEY": "your-jellyfin-api-key-here",
+    "path_mappings": [
+        {
+            "name": "Movies",
+            "plex_path": "/data/movies/",
+            "real_path": "/mnt/user/media/movies/",
+            "cache_path": "/mnt/cache/media/movies/",
+            "host_cache_path": null,
+            "cacheable": true,
+            "enabled": true
+        },
+        {
+            "name": "TV Shows",
+            "plex_path": "/data/tv/",
+            "real_path": "/mnt/user/media/tv/",
+            "cache_path": "/mnt/cache/media/tv/",
+            "host_cache_path": null,
+            "cacheable": true,
+            "enabled": true
+        },
+        {
+            "name": "4K Movies",
+            "plex_path": "/data/movies-4k/",
+            "real_path": "/mnt/user/media/movies-4k/",
+            "cache_path": "/mnt/cache/media/movies-4k/",
+            "host_cache_path": null,
+            "cacheable": true,
+            "enabled": true
+        },
+        {
+            "name": "Remote NAS",
+            "plex_path": "/data/remote-nas/",
+            "real_path": "/mnt/remotes/nas-share/",
+            "cache_path": null,
+            "host_cache_path": null,
+            "cacheable": false,
+            "enabled": true
+        }
+    ],
+    "cache_dir": "/mnt/cache/media/",
+    "valid_sections": [
+        "Movies",
+        "Shows"
+    ],
+    "number_episodes": 5,
+    "days_to_monitor": 183,
+    "prefetch_minimum_minutes": 0,
+    "watchlist_toggle": true,
+    "watchlist_episodes": 3,
+    "users_toggle": true,
+    "users": [
+        {
+            "title": "MainUser",
+            "skip_ondeck": false,
+            "skip_watchlist": false
+        },
+        {
+            "title": "FamilyMember",
+            "skip_ondeck": false,
+            "skip_watchlist": false
+        }
+    ],
+    "remote_watchlist_toggle": false,
+    "watched_move": true,
+    "cache_retention_hours": 12,
+    "watchlist_retention_days": 0,
+    "ondeck_retention_days": 0,
+    "cache_drive_size": "",
+    "cache_limit": "80%",
+    "min_free_space": "50GB",
+    "plexcache_quota": "",
+    "cache_eviction_mode": "none",
+    "cache_eviction_threshold_percent": 90,
+    "eviction_min_priority": 60,
+    "create_plexcached_backups": true,
+    "hardlinked_files": "skip",
+    "check_hardlinks_on_restore": false,
+    "cleanup_empty_folders": true,
+    "use_symlinks": false,
+    "auto_transfer_upgrades": true,
+    "backup_upgraded_files": true,
+    "excluded_folders": [],
+    "exit_if_active_session": false,
+    "max_concurrent_moves_cache": 5,
+    "max_concurrent_moves_array": 2,
+    "notification_type": "both",
+    "unraid_level": "summary",
+    "unraid_levels": [],
+    "webhook_url": "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN",
+    "webhook_level": "summary",
+    "webhook_levels": [],
+    "max_log_files": 24,
+    "keep_error_logs_days": 7,
+    "activity_retention_hours": 24
+}

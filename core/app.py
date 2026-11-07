@@ -210,7 +210,9 @@ class PlexCacheApp:
             # as new on each run/container recreation (issue #190).
             try:
                 from core.plex_api import ensure_plex_client_identity, PLEXCACHE_CLIENT_ID_KEY
-                client_id = ensure_plex_client_identity(str(self.config_file))
+                client_id = None
+                if self.config_manager.plex.media_server == "plex":
+                    client_id = ensure_plex_client_identity(str(self.config_file))
                 if client_id:
                     # Keep the in-memory config in sync so a later config save
                     # (e.g. new-user discovery) doesn't drop the persisted id.
@@ -559,7 +561,19 @@ class PlexCacheApp:
         return False
 
     def _init_plex_manager(self) -> None:
-        """Initialize the Plex manager with token cache."""
+        """Initialize the media server manager (Plex, or Jellyfin when configured)."""
+        if self.config_manager.plex.media_server == "jellyfin":
+            from core.jellyfin_api import JellyfinManager
+            logging.debug("Initializing Jellyfin manager...")
+            self.plex_manager = JellyfinManager(
+                jellyfin_url=self.config_manager.plex.jellyfin_url,
+                api_key=self.config_manager.plex.jellyfin_api_key,
+                retry_limit=self.config_manager.performance.retry_limit,
+                delay=self.config_manager.performance.delay,
+                watchlist_enabled=self.config_manager.cache.watchlist_toggle,
+                settings_users=self.config_manager.plex.users,
+            )
+            return
         logging.debug("Initializing Plex manager...")
         token_cache_file = str(self.config_manager.get_user_tokens_file())
         rss_cache_file = str(self.config_manager.get_rss_cache_file())
@@ -1045,10 +1059,13 @@ class PlexCacheApp:
             # Add user (plex.users and settings_data['users'] are the same list reference)
             self.config_manager.plex.users.append(user_info)
 
-            logging.warning(
-                f"[PLEX API] Auto-added new user '{username}' with tracking disabled. "
-                f"Enable via Settings > Plex or re-run Setup wizard."
-            )
+            if user_info.get('skip_ondeck') is False and user_info.get('skip_watchlist') is False:
+                logging.info(f"[USERS] Auto-added new user '{username}' with tracking enabled.")
+            else:
+                logging.warning(
+                    f"[PLEX API] Auto-added new user '{username}' with tracking disabled. "
+                    f"Enable via Settings > Plex or re-run Setup wizard."
+                )
             added_count += 1
 
         # Save updated settings
@@ -1088,6 +1105,11 @@ class PlexCacheApp:
 
     def _get_media_path_from_session(self, session) -> Optional[str]:
         """Extract media file path from a Plex session. Returns None if unable to extract."""
+        if hasattr(self.plex_manager, "get_session_media_path"):
+            media_path = self.plex_manager.get_session_media_path(session)
+            if media_path:
+                logging.debug(f"Active session detected, skipping: {media_path}")
+            return media_path
         try:
             media = str(session.source())
             # Use regex for safer parsing: extract ID between first two colons
@@ -1386,6 +1408,13 @@ class PlexCacheApp:
         pin_entries = self.pinned_tracker.list_pins()
         if not pin_entries:
             logging.debug("No pinned media configured")
+            return
+
+        if getattr(self.plex_manager, "plex", None) is None:
+            logging.info(
+                f"[PINNED] {len(pin_entries)} pin(s) configured, but pinned media is "
+                f"only supported with Plex - skipping"
+            )
             return
 
         preference = self.config_manager.plex.pinned_preferred_resolution or "highest"

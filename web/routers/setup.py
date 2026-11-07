@@ -55,6 +55,10 @@ def is_setup_complete() -> bool:
     settings_service = get_settings_service()
     settings = settings_service.get_all()
 
+    # Jellyfin installs are configured via JELLYFIN_URL / JELLYFIN_API_KEY
+    if str(settings.get("media_server", "plex")).strip().lower() == "jellyfin":
+        return bool(settings.get("JELLYFIN_URL") and settings.get("JELLYFIN_API_KEY"))
+
     # Setup is complete if we have Plex URL and token configured
     plex_url = settings.get("PLEX_URL", "")
     plex_token = settings.get("PLEX_TOKEN", "")

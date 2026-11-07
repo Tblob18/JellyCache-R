@@ -99,9 +99,13 @@ class PathConfig:
 
 @dataclass
 class PlexConfig:
-    """Configuration for Plex server settings."""
+    """Configuration for the media server (Plex or Jellyfin)."""
     plex_url: str = ""
     plex_token: str = ""
+    # Which media server to query: "plex" (default) or "jellyfin".
+    media_server: str = "plex"
+    jellyfin_url: str = ""
+    jellyfin_api_key: str = ""
     valid_sections: Optional[List[int]] = None
     number_episodes: int = 10
     days_to_monitor: int = 183
@@ -457,8 +461,11 @@ class ConfigManager:
     
     def _load_plex_config(self) -> None:
         """Load Plex-related configuration."""
-        self.plex.plex_url = self.settings_data['PLEX_URL']
-        self.plex.plex_token = self.settings_data['PLEX_TOKEN']
+        self.plex.media_server = self._media_server()
+        self.plex.plex_url = self.settings_data.get('PLEX_URL', '')
+        self.plex.plex_token = self.settings_data.get('PLEX_TOKEN', '')
+        self.plex.jellyfin_url = self.settings_data.get('JELLYFIN_URL', '')
+        self.plex.jellyfin_api_key = self.settings_data.get('JELLYFIN_API_KEY', '')
         self.plex.number_episodes = self.settings_data['number_episodes']
         self.plex.valid_sections = self.settings_data['valid_sections']
         self.plex.days_to_monitor = self.settings_data['days_to_monitor']
@@ -785,6 +792,18 @@ class ConfigManager:
             except Exception as e:
                 logging.warning(f"Could not save migrated config: {e}")
 
+    def _media_server(self) -> str:
+        """The configured media server, lower-cased ("plex" or "jellyfin")."""
+        return str(self.settings_data.get('media_server') or 'plex').strip().lower()
+
+    def is_jellyfin(self) -> bool:
+        return self._media_server() == 'jellyfin'
+
+    def _server_credential_fields(self) -> List[str]:
+        if self.is_jellyfin():
+            return ['JELLYFIN_URL', 'JELLYFIN_API_KEY']
+        return ['PLEX_URL', 'PLEX_TOKEN']
+
     def _validate_required_fields(self) -> None:
         """Validate that all required fields exist in the configuration."""
         logging.debug("Validating required fields...")
@@ -793,8 +812,8 @@ class ConfigManager:
         has_path_mappings = bool(self.settings_data.get('path_mappings'))
 
         # Core required fields (always required)
-        required_fields = [
-            'PLEX_URL', 'PLEX_TOKEN', 'number_episodes', 'valid_sections',
+        required_fields = self._server_credential_fields() + [
+            'number_episodes', 'valid_sections',
             'days_to_monitor', 'users_toggle', 'watchlist_toggle',
             'watchlist_episodes', 'watched_move', 'cache_dir',
             'max_concurrent_moves_array', 'max_concurrent_moves_cache'
@@ -824,6 +843,9 @@ class ConfigManager:
         type_checks = {
             'PLEX_URL': str,
             'PLEX_TOKEN': str,
+            'JELLYFIN_URL': str,
+            'JELLYFIN_API_KEY': str,
+            'media_server': str,
             'number_episodes': int,
             'valid_sections': list,
             'days_to_monitor': int,
@@ -890,11 +912,12 @@ class ConfigManager:
             if value < 0:
                 errors.append(f"'{field}' must be non-negative, got {value}")
 
-        # Validate non-empty URL and token
-        if not self.settings_data.get('PLEX_URL', '').strip():
-            errors.append("'PLEX_URL' cannot be empty")
-        if not self.settings_data.get('PLEX_TOKEN', '').strip():
-            errors.append("'PLEX_TOKEN' cannot be empty")
+        # Validate media server selection and its non-empty URL and token
+        if self._media_server() not in ('plex', 'jellyfin'):
+            errors.append(f"'media_server' must be 'plex' or 'jellyfin', got '{self._media_server()}'")
+        for field in self._server_credential_fields():
+            if not str(self.settings_data.get(field, '')).strip():
+                errors.append(f"'{field}' cannot be empty")
 
         if errors:
             error_msg = "Configuration validation errors: " + "; ".join(errors)

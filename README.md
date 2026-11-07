@@ -1,3 +1,12 @@
+# JellyCache-R — PlexCache-D with Jellyfin support
+
+This fork adds a **Jellyfin** backend to PlexCache-D: set `"media_server": "jellyfin"` and it caches your
+Jellyfin *Continue Watching*, *Next Up* and *Favorites* to the cache pool instead of Plex OnDeck/Watchlist.
+See **[docs/JELLYFIN.md](docs/JELLYFIN.md)** for setup and [docs/example_settings_jellyfin.json](docs/example_settings_jellyfin.json).
+Everything below is the upstream PlexCache-D README.
+
+---
+
 # PlexCache-D V3.2: Automate Plex Media Management
 ### Updated 4/6/26
 
