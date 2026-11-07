@@ -1625,7 +1625,10 @@ class PlexCacheApp:
                     "episode_info": ep_info
                 }
 
-            result_set.update(modified_items)
+            # Replace (not extend) with the converted paths: keeping the server-side
+            # paths alongside their real-path twins double-counted every watchlist
+            # item and leaked server paths into watchlist_items.
+            result_set = set(modified_items)
             wl_assoc_mode = self.config_manager.cache.cache_associated_files
             if wl_assoc_mode == "all":
                 watchlist_sibling_map = self.sibling_finder.get_media_siblings_grouped(modified_items, files_to_skip=set(self.files_to_skip))
