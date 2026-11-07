@@ -18,6 +18,7 @@ Concept mapping:
 
 import logging
 import threading
+import zlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Generator, List, Optional, Tuple
@@ -32,6 +33,16 @@ TICKS_PER_MINUTE = 10_000_000 * 60
 ITEM_FIELDS = "Path,MediaSources,RunTimeTicks,ParentId"
 
 WatchlistTuple = Tuple[str, str, Optional[datetime], Optional[Dict[str, Any]], Optional[str], str]
+
+
+def jellyfin_section_id(item_id: str) -> int:
+    """Stable integer id for a Jellyfin library GUID.
+
+    The web UI, settings models and path mappings key libraries by Plex's
+    integer section id. CRC32 of the library ItemId gives Jellyfin libraries
+    an equivalent: stable for the life of the library, 31-bit positive.
+    """
+    return zlib.crc32(item_id.encode("utf-8")) & 0x7FFFFFFF
 
 
 def _log_api_error(context: str, error: Exception) -> None:
@@ -188,14 +199,17 @@ class JellyfinManager:
             _log_api_error("list libraries", e)
             return
         for folder in folders:
+            item_id = folder.get("ItemId", "")
             entry = {
-                "id": folder.get("ItemId", ""),
+                "id": item_id,
+                "section_id": jellyfin_section_id(item_id) if item_id else None,
                 "name": folder.get("Name", ""),
                 "type": folder.get("CollectionType", ""),
                 "locations": [loc.rstrip("/") + "/" for loc in folder.get("Locations") or []],
             }
             if entry["id"]:
                 self._libraries[entry["id"]] = entry
+                self._libraries[str(entry["section_id"])] = entry
             if entry["name"]:
                 self._libraries[entry["name"].lower()] = entry
         logging.debug(f"[JELLYFIN API] Libraries: "
@@ -281,6 +295,16 @@ class JellyfinManager:
         if self._users:
             logging.info(f"USERS: {', '.join(sorted(self._users, key=str.lower))}")
         return dict(self._users)
+
+    def list_users(self) -> List[Dict[str, Any]]:
+        """All enabled server users: [{name, id, is_admin}] (for the web UI)."""
+        users = self._get("/Users") or []
+        return [
+            {"name": u["Name"], "id": u["Id"],
+             "is_admin": bool((u.get("Policy") or {}).get("IsAdministrator"))}
+            for u in users
+            if u.get("Name") and u.get("Id") and not (u.get("Policy") or {}).get("IsDisabled")
+        ]
 
     def get_newly_discovered_users(self) -> List[dict]:
         return self._newly_discovered_users
@@ -381,7 +405,8 @@ class JellyfinManager:
         items: List[OnDeckItem] = []
         seen_paths = set()
 
-        def add(item: Dict[str, Any], current: bool) -> bool:
+        def add(item: Dict[str, Any], current: bool, detail: str,
+                related: Optional[str] = None) -> bool:
             path = _item_path(item)
             if not path or path in seen_paths or not self._in_libraries(path, locations):
                 return False
@@ -390,6 +415,7 @@ class JellyfinManager:
                 file_path=path, username=username,
                 episode_info=_episode_info(item) if item.get("Type") == "Episode" else None,
                 is_current_ondeck=current, rating_key=item.get("Id"),
+                source_detail=detail, related_title=related,
             ))
             logging.debug(f"[USER:{username}] OnDeck{'' if current else ' (prefetch)'}: {path}")
             return True
@@ -409,7 +435,8 @@ class JellyfinManager:
         next_up = self._get("/Shows/NextUp", next_up_params).get("Items", [])
 
         handled_series = set()
-        for item in resume + next_up:
+        tagged = [(i, "continue_watching") for i in resume] + [(i, "next_up") for i in next_up]
+        for item, detail in tagged:
             if item.get("Type") not in ("Movie", "Episode"):
                 continue
             last_played = _parse_jellyfin_date((item.get("UserData") or {}).get("LastPlayedDate"))
@@ -417,14 +444,17 @@ class JellyfinManager:
                 logging.debug(f"[USER:{username}] Skipping '{item.get('Name')}' - last played "
                               f"{last_played:%Y-%m-%d}, older than {days} days")
                 continue
-            if not add(item, current=True):
+            if not add(item, current=True, detail=detail):
                 continue
             series_id = item.get("SeriesId")
             if item.get("Type") == "Episode" and series_id and series_id not in handled_series:
                 handled_series.add(series_id)
+                info = _episode_info(item)
+                anchor = (f"{info['show']} S{info['season']:02d}E{info['episode']:02d}"
+                          if info else item.get("Name", ""))
                 for upcoming in self._upcoming_episodes(item, user_id, number_episodes,
                                                         prefetch_minimum_minutes):
-                    add(upcoming, current=False)
+                    add(upcoming, current=False, detail="prefetch", related=anchor)
         return items
 
     def _upcoming_episodes(self, episode: Dict[str, Any], user_id: str, count: int,

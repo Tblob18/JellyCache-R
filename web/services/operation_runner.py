@@ -1077,6 +1077,7 @@ class OperationRunner:
                 verbose=verbose,
                 bytes_progress_callback=_bytes_cb,
                 record_activity=False,  # OperationRunner handles activity via log parsing
+                run_source=self._run_source,
             )
 
             # Store reference so stop_operation can signal it

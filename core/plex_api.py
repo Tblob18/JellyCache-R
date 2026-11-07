@@ -124,6 +124,10 @@ class OnDeckItem:
     episode_info: Optional[Dict[str, any]] = None
     is_current_ondeck: bool = False
     rating_key: Optional[str] = None
+    # Why this item is on the list, in the server's own terms (e.g. Jellyfin
+    # "next_up"). None = default OnDeck semantics. Read by the move journal.
+    source_detail: Optional[str] = None
+    related_title: Optional[str] = None
 
 
 @dataclass

@@ -37,19 +37,29 @@ class PlexCacheApp:
     """Main PlexCache application class."""
 
     # One-time data migrations, keyed by name in data/migrations.json.
+    # Class-level default so partially-initialized instances (tests build the
+    # app via __new__) skip journaling instead of raising AttributeError.
+    journal = None
+
     _MIGRATIONS_FILENAME = "migrations.json"
     _EMPTY_FOLDER_BACKFILL_KEY = "empty_folder_backfill"  # issue #196
 
     def __init__(self, config_file: str, dry_run: bool = False,
                  quiet: bool = False, verbose: bool = False,
                  bytes_progress_callback=None,
-                 record_activity: bool = True):
+                 record_activity: bool = True,
+                 run_source: str = "cli"):
         self.config_file = config_file
         self.dry_run = dry_run  # Don't move files, just simulate
         self.quiet = quiet  # Override notification level to errors-only
         self.verbose = verbose  # Enable DEBUG level logging
         self._bytes_progress_callback = bytes_progress_callback  # Byte-level progress for operation banner
         self._record_activity = record_activity  # Write to shared activity feed (disabled when web OperationRunner handles it)
+        self.run_source = run_source  # "cli" | "web" | "scheduled" (move journal attribution)
+        # Move journal: per-run record of every move decision and its reason.
+        self.journal = None
+        self._journal_ondeck: Dict[str, List[tuple]] = {}  # real path -> [(user, detail, related, is_current)]
+        self._journal_watchlist_users: Dict[str, Set[str]] = {}  # real path -> users
         self.start_time = time.time()
         
         # Initialize components
@@ -128,6 +138,173 @@ class PlexCacheApp:
             run_source="cli",
         )
 
+    # ------------------------------------------------------------------
+    # Move journal (what moved and why) - see core/move_journal.py
+    # ------------------------------------------------------------------
+
+    def _start_journal(self) -> None:
+        try:
+            from core.move_journal import MoveJournal
+            self.journal = MoveJournal(
+                run_id=self._run_id or uuid.uuid4().hex,
+                run_source=self.run_source,
+                dry_run=self.dry_run,
+                media_server=getattr(self.config_manager.plex, "media_server", "plex"),
+            )
+        except Exception as e:  # never let bookkeeping break a run
+            logging.warning(f"[JOURNAL] Move journal disabled for this run: {e}")
+            self.journal = None
+
+    def _finalize_journal(self) -> None:
+        if not self.journal:
+            return
+        try:
+            written = self.journal.finalize()
+            if written:
+                logging.debug(f"[JOURNAL] {written} decisions written to move journal")
+        except Exception as e:
+            logging.warning(f"[JOURNAL] Failed to write move journal: {e}")
+
+    def _server_terms(self) -> Dict[str, str]:
+        if getattr(self.config_manager.plex, "media_server", "plex") == "jellyfin":
+            return {"ondeck": "Continue Watching", "watchlist": "Favorites"}
+        return {"ondeck": "On Deck", "watchlist": "Watchlist"}
+
+    @staticmethod
+    def _episode_label(info: Optional[dict]) -> str:
+        if not info:
+            return ""
+        try:
+            return f"{info.get('show', '')} S{int(info['season']):02d}E{int(info['episode']):02d}"
+        except (KeyError, TypeError, ValueError):
+            return info.get("show", "") or ""
+
+    def _journal_cache_reason(self, path: str) -> Tuple[str, str, List[str], Optional[dict], Optional[str]]:
+        """(reason_code, reason, users, media, related) for a file being cached."""
+        terms = self._server_terms()
+        source = self.source_map.get(path)
+        info_entry = self.media_info_map.get(path) or {}
+        media = None
+
+        if source == "pinned":
+            return "pinned", "Pinned in PlexCache - always kept on cache", [], None, None
+
+        ondeck = self._journal_ondeck.get(path)
+        if ondeck:
+            users = sorted({o[0] for o in ondeck})
+            current = [o for o in ondeck if o[3]]
+            pick = current[0] if current else ondeck[0]
+            _, detail, related, is_current, ep_info = pick
+            if ep_info:
+                media = {"type": "episode", "show": ep_info.get("show"),
+                         "season": ep_info.get("season"), "episode": ep_info.get("episode")}
+            who = ", ".join(users)
+            if is_current:
+                if detail == "next_up":
+                    return "next_up", f"Next Up for {who}", users, media, None
+                if detail == "continue_watching":
+                    return "continue_watching", f"In {who}'s Continue Watching", users, media, None
+                return "on_deck", f"On {who}'s {terms['ondeck']}", users, media, None
+            anchor = related or "the episode in progress"
+            return ("prefetch", f"Upcoming episode after {anchor} ({who}) - prefetched so the next "
+                    f"episode plays from cache", users, media, None)
+
+        wl_users = sorted(self._journal_watchlist_users.get(path, set()))
+        if wl_users or source == "watchlist":
+            ep_info = info_entry.get("episode_info")
+            if ep_info:
+                media = {"type": "episode", "show": ep_info.get("show"),
+                         "season": ep_info.get("season"), "episode": ep_info.get("episode")}
+            code = "favorite" if terms["watchlist"] == "Favorites" else "watchlist"
+            who = ", ".join(wl_users) or "a user"
+            what = f" ({self._episode_label(ep_info)})" if ep_info else ""
+            return code, f"In {who}'s {terms['watchlist']}{what}", wl_users, media, None
+
+        parent = self._journal_sibling_parent.get(path) if hasattr(self, "_journal_sibling_parent") else None
+        if parent:
+            return ("sidecar", f"Belongs to {os.path.basename(parent)} (subtitles/artwork/metadata "
+                    f"travel with their video)", [], None, parent)
+        return "unknown", f"Source: {source or 'unknown'}", [], None, None
+
+    def _journal_plan_cache(self, files: List[str]) -> None:
+        if not self.journal:
+            return
+        self._journal_sibling_parent = {
+            sib: video for video, sibs in (self.sibling_map or {}).items() for sib in (sibs or [])
+        }
+        for path in files:
+            try:
+                code, reason, users, media, related = self._journal_cache_reason(path)
+                self.journal.record("cache", path, code, reason, users=users, media=media,
+                                    related=related, source=self.source_map.get(path))
+            except Exception as e:
+                logging.debug(f"[JOURNAL] Could not record cache reason for {path}: {e}")
+
+    def _journal_plan_restore(self, files: List[str]) -> None:
+        if not self.journal:
+            return
+        reasons = getattr(self.file_filter, "last_move_back_reasons", {}) or {}
+        for path in files:
+            code, reason, related = reasons.get(path, ("unknown", "No longer needed on cache", None))
+            self.journal.record("restore", path, code, reason, related=related,
+                                size_bytes=self._journal_size(path))
+        for path, code, reason in getattr(self.file_filter, "last_move_back_holds", []) or []:
+            self.journal.record("hold", path, code, reason, status="held",
+                                size_bytes=self._journal_size(path))
+
+    def _journal_size(self, real_path: str) -> int:
+        """Size of a file, preferring its cache copy (the array copy may be a .plexcached)."""
+        for candidate in (self._cache_path_for(real_path), real_path):
+            if candidate:
+                try:
+                    return os.path.getsize(candidate)
+                except OSError:
+                    continue
+        return 0
+
+    def _journal_record_priority_skips(self, before: List[str], after: List[str]) -> None:
+        if not self.journal:
+            return
+        kept = set(after)
+        dropped = [p for p in before if p not in kept]
+        if not dropped:
+            return
+        from core.move_journal import SKIPPED
+        min_priority = self.config_manager.cache.eviction_min_priority
+        for path in dropped:
+            prior = self.journal.discard("cache", path)
+            try:
+                score = self._estimate_priority(path, self.source_map.get(path, "unknown"))
+            except Exception:
+                score = None
+            wanted = prior["reason"] if prior else "Wanted on cache"
+            self.journal.record(
+                "skip", path, "below_priority",
+                f"{wanted}, but its priority score ({score}) is below the eviction minimum "
+                f"({min_priority}) - it would be evicted again, so it is not cached",
+                users=(prior or {}).get("users"), media=(prior or {}).get("media"),
+                status=SKIPPED, priority=score)
+
+    def _journal_verify_moves(self) -> None:
+        """Turn planned cache/restore entries into done/failed by looking at the disk."""
+        if not self.journal or self.dry_run:
+            return
+        from core.move_journal import DONE, FAILED
+        for path in self.journal.pending("cache"):
+            cache_path = self._cache_path_for(path)
+            if cache_path and os.path.exists(cache_path):
+                self.journal.set_status("cache", path, DONE)
+            else:
+                self.journal.set_status("cache", path, FAILED,
+                                        "Not on cache after the move step (space limit, error or stop - see log)")
+        for path in self.journal.pending("restore"):
+            cache_path = self._cache_path_for(path)
+            if cache_path and not os.path.exists(cache_path):
+                self.journal.set_status("restore", path, DONE)
+            else:
+                self.journal.set_status("restore", path, FAILED,
+                                        "Still on cache after the move step - see log")
+
     def request_stop(self) -> None:
         """Request the operation to stop gracefully after current file."""
         self._stop_requested = True
@@ -204,6 +381,8 @@ class PlexCacheApp:
 
             # Set debug mode early so all debug messages show
             self._set_debug_mode()
+
+            self._start_journal()
 
             # Pin a stable Plex device identity before any Plex connection so the
             # server sees one known "PlexCache-D" device instead of re-flagging it
@@ -320,6 +499,8 @@ class PlexCacheApp:
             else:
                 print(f"Application error: {type(e).__name__}: {e}")
             raise
+        finally:
+            self._finalize_journal()
 
     def _migrate_exclude_file(self) -> None:
         """One-time migration: rename old exclude file to new name."""
@@ -1220,6 +1401,11 @@ class PlexCacheApp:
                 is_current_ondeck=item.is_current_ondeck,
                 rating_key=item.rating_key
             )
+            self._journal_ondeck.setdefault(real_path, []).append((
+                item.username, getattr(item, "source_detail", None),
+                getattr(item, "related_title", None), item.is_current_ondeck,
+                item.episode_info,
+            ))
             # Build media_info_map from OnDeck metadata
             ep = item.episode_info
             self.media_info_map[real_path] = {
@@ -1349,6 +1535,7 @@ class PlexCacheApp:
 
         # Only uncached files proceed through eviction + move pipeline
         self.media_to_cache = needs_caching
+        self._journal_plan_cache(needs_caching)
 
         # Improved summary log
         total = len(self.all_active_media)
@@ -1378,6 +1565,8 @@ class PlexCacheApp:
                 logging.debug("Checking for files to move back to array...")
                 # Provide Plex media type metadata for classification
                 self.file_filter.set_media_info_map(self.media_info_map)
+                terms = self._server_terms()
+                self.file_filter.list_terms = f"{terms['ondeck']} or {terms['watchlist']}"
                 self._check_files_to_move_back_to_array()
 
     def _process_pinned_media(self, modified_paths: Dict[str, None]) -> None:
@@ -1532,6 +1721,7 @@ class PlexCacheApp:
         """
         result_set = set()
         plex_path_to_info = {}  # Maps plex paths to episode_info for media_info_map
+        wl_users: Dict[str, Set[str]] = {}  # plex path -> users (move journal)
         retention_days = self.config_manager.cache.watchlist_retention_days
         per_user_wl_days = self.config_manager.plex.per_user_watchlist_days or {}
         expired_count = 0
@@ -1576,6 +1766,7 @@ class PlexCacheApp:
 
                 result_set.add(file_path)
                 plex_path_to_info[file_path] = episode_info
+                wl_users.setdefault(file_path, set()).add(username)
 
             if self.should_stop:
                 logging.info("Operation stopped during watchlist processing")
@@ -1618,6 +1809,7 @@ class PlexCacheApp:
 
                         result_set.add(file_path)
                         plex_path_to_info[file_path] = episode_info
+                        wl_users.setdefault(file_path, set()).add(username)
 
                     if rss_expired_count > 0:
                         # Stays DEBUG: this is a per-source breakdown that is
@@ -1645,6 +1837,9 @@ class PlexCacheApp:
             plex_paths = list(result_set)
             modified_items = self.file_path_modifier.modify_file_paths(plex_paths)
             plex_to_real = dict(zip(plex_paths, modified_items))
+            for plex_path, users in wl_users.items():
+                real_path = plex_to_real.get(plex_path, plex_path)
+                self._journal_watchlist_users.setdefault(real_path, set()).update(users)
 
             # Populate media_info_map with real/modified paths
             for plex_path, ep_info in plex_path_to_info.items():
@@ -2390,9 +2585,23 @@ class PlexCacheApp:
             if files_to_restore or files_to_move:
                 self._log_restore_and_move_summary(files_to_restore, files_to_move)
 
+            if files_to_release and self.journal:
+                for path in files_to_release:
+                    prior = self.journal.discard("restore", path)
+                    why = prior["reason"] if prior else "No longer needed on cache"
+                    self.journal.record(
+                        "release", path, "released",
+                        f"{why} - handed back to the Unraid mover (original never left the array, "
+                        f"no copy needed)",
+                        size_bytes=self._journal_size(path))
+
             released_count = 0
             if files_to_release:
                 released_count = self._release_files(files_to_release)
+                if self.journal and not self.dry_run:
+                    from core.move_journal import DONE, FAILED
+                    for path in files_to_release:
+                        self.journal.set_status("release", path, DONE if released_count else FAILED)
 
             if self.media_to_array:
                 self._safe_move_files(self.media_to_array, 'array')
@@ -2426,7 +2635,9 @@ class PlexCacheApp:
         # Filter out files that would be immediately evicted (prevents cache/evict loop)
         # Now runs AFTER eviction, so threshold check is accurate
         if self.media_to_cache:
+            before_filter = list(self.media_to_cache)
             self.media_to_cache = self._filter_low_priority_files(self.media_to_cache, self.source_map)
+            self._journal_record_priority_skips(before_filter, self.media_to_cache)
 
         # Log preview of files to be cached
         if self.media_to_cache:
@@ -2446,6 +2657,8 @@ class PlexCacheApp:
         # sized, and _safe_move_files('array') here cannot re-enter that sizing.
         if self.config_manager.cache.watched_move:
             self._reclaim_released_if_constrained()
+
+        self._journal_verify_moves()
 
         # Associate sibling files with their parent videos in the timestamp tracker
         if self.timestamp_tracker and self.sibling_map:
@@ -3108,6 +3321,19 @@ class PlexCacheApp:
             except (OSError, FileNotFoundError):
                 size_mb = 0
             logging.info(f"[EVICTION] Evicting ({priority_info}): {os.path.basename(cache_path)} ({size_mb:.2f}MB)")
+            if self.journal:
+                real_path, _ = (self.file_path_modifier.convert_cache_to_real(cache_path)
+                                if self.file_path_modifier else (None, None))
+                if eviction_mode == "smart":
+                    code = "evicted_priority"
+                    why = (f"Cache over its limit - lowest priority file evicted "
+                           f"({priority_info}, need {space_to_free / (1024**3):.2f}GB)")
+                else:
+                    code = "evicted_fifo"
+                    why = (f"Cache over its limit - oldest cached file evicted "
+                           f"(need {space_to_free / (1024**3):.2f}GB)")
+                self.journal.record("evict", real_path or cache_path, code, why,
+                                    size_bytes=int(size_mb * 1024 * 1024), cache_path=cache_path)
 
         if self.dry_run:
             logging.info(f"[EVICTION] DRY-RUN: Would evict {len(candidates)} files")
@@ -3265,6 +3491,11 @@ class PlexCacheApp:
 
                 files_evicted += 1
                 bytes_freed += file_size
+                if self.journal:
+                    from core.move_journal import DONE
+                    real_path, _ = (self.file_path_modifier.convert_cache_to_real(cache_path)
+                                    if self.file_path_modifier else (None, None))
+                    self.journal.set_status("evict", real_path or cache_path, DONE)
 
             except OSError as e:
                 logging.warning(f"Failed to evict {cache_path}: {e}")
@@ -3548,6 +3779,7 @@ class PlexCacheApp:
             if files_to_move_back:
                 logging.debug(f"Found {len(files_to_move_back)} files to move back to array")
                 self.media_to_array.extend(files_to_move_back)
+            self._journal_plan_restore(files_to_move_back)
 
             # Clean up stale entries immediately (files already gone from cache — safe to remove)
             # Skip in dry-run mode to avoid modifying tracking files

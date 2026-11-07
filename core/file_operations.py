@@ -3784,6 +3784,10 @@ class FileFilter:
             logging.debug(f"TV episode not needed (S{season_num:02d}E{episode_num:02d}): {show_name}")
             return False
 
+    def _list_terms(self) -> str:
+        """How the media server names the lists that keep files cached."""
+        return getattr(self, "list_terms", None) or "OnDeck or Watchlist"
+
     def _cache_to_real_path(self, cache_path: str) -> Optional[str]:
         """Real (array) path for a container cache path, or None if unmapped."""
         if self.path_modifier:
@@ -3827,6 +3831,11 @@ class FileFilter:
         stale_entries = []
         move_back_exclude_paths = []
         retention_holds = []
+        # Why each file is moving back / being held (read by the move journal).
+        # array path -> (reason_code, human reason, related path or None)
+        self.last_move_back_reasons: Dict[str, Tuple[str, str, Optional[str]]] = {}
+        # (real path, reason_code, human reason)
+        self.last_move_back_holds: List[Tuple[str, str, str]] = []
 
         try:
             # Read exclude file
@@ -3899,6 +3908,17 @@ class FileFilter:
                     if self._is_tv_episode_still_needed(show_name, season_num, episode_num, tv_show_needed_episodes):
                         continue
                     media_name = show_name
+                    try:
+                        ep_label = f"S{int(season_num):02d}E{int(episode_num):02d}"
+                    except (TypeError, ValueError):
+                        ep_label = f"S{season_num}E{episode_num}"
+                    if show_name in tv_show_needed_episodes:
+                        move_reason = ("episode_done",
+                                       f"{show_name} {ep_label} is no longer in any user's watch window "
+                                       f"(already watched, or outside the prefetch range)")
+                    else:
+                        move_reason = ("show_inactive",
+                                       f"{show_name} is no longer on any user's {self._list_terms()}")
                 else:
                     media_name = self._extract_media_name(cache_file, known_movie=(media_type == "movie"))
                     if media_name is None:
@@ -3907,6 +3927,9 @@ class FileFilter:
                     if media_name in needed_movies:
                         logging.debug(f"Movie still needed, keeping in cache: {media_name}")
                         continue
+                    move_reason = ("movie_inactive",
+                                   f"{media_name} is no longer on any user's {self._list_terms()} "
+                                   f"(finished or removed)")
 
                 # Check retention period (use container path for timestamp lookup)
                 if self.timestamp_tracker and self.cache_retention_hours > 0:
@@ -3915,6 +3938,9 @@ class FileFilter:
                         display_name = self._extract_display_name(cache_file)
                         retention_holds.append((media_name, remaining, display_name))
                         remaining_str = f"{remaining:.0f}h" if remaining >= 1 else f"{remaining * 60:.0f}m"
+                        self.last_move_back_holds.append((
+                            real_path or check_path, "retention_hold",
+                            f"{move_reason[1]} - kept for cache retention, {remaining_str} left"))
                         logging.debug(f"Retention hold ({remaining_str} left): {display_name}")
                         continue
 
@@ -3923,6 +3949,9 @@ class FileFilter:
                 if files_to_skip and check_path in files_to_skip:
                     display_name = self._extract_display_name(cache_file)
                     logging.debug(f"Active session, keeping in cache: {display_name}")
+                    self.last_move_back_holds.append((
+                        real_path or check_path, "active_session",
+                        f"{move_reason[1]} - but it is playing right now"))
                     continue
 
                 # Skip files with active hard links
@@ -3934,6 +3963,9 @@ class FileFilter:
                             logging.warning(
                                 f"Hard-linked ({stat_info.st_nlink} links), keeping in cache: {display_name}"
                             )
+                            self.last_move_back_holds.append((
+                                real_path or check_path, "hardlinked",
+                                f"{move_reason[1]} - but it has {stat_info.st_nlink} hard links"))
                             continue
                     except OSError as e:
                         logging.debug(f"Could not check hard link count for {cache_file}: {e}")
@@ -3948,6 +3980,7 @@ class FileFilter:
                 logging.debug(f"Media no longer needed, will move back to array: {display_name} - {cache_file}")
                 files_to_move_back.append(array_file)
                 move_back_exclude_paths.append(cache_file)
+                self.last_move_back_reasons[array_file] = (move_reason[0], move_reason[1], None)
 
             # Second pass: collect associated files for videos being evicted
             # and apply reference counting for directory-level files
@@ -3995,6 +4028,12 @@ class FileFilter:
                             array_assoc = assoc_file.replace(self.cache_dir, self.real_source, 1)
 
                         host_assoc = self._translate_to_host_path(assoc_file)
+                        parent_real = self._cache_to_real_path(check_path)
+                        self.last_move_back_reasons[array_assoc] = (
+                            "sidecar",
+                            f"Belongs to {os.path.basename(check_path)}, which is moving back",
+                            parent_real,
+                        )
                         additional_move_back.append(array_assoc)
                         additional_exclude_paths.append(host_assoc)
                         eviction_set_host.add(host_assoc)
