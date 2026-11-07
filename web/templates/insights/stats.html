@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+
+{% block content %}
+<header class="page-header">
+    <div class="page-title">
+        <div class="page-title-icon"><i data-lucide="bar-chart-3"></i></div>
+        <div>
+            <h1>Stats</h1>
+            <p>What PlexCache did over the last {{ days }} days (dry runs excluded)</p>
+        </div>
+    </div>
+    <div class="action-buttons">
+        {% for d in allowed_days if d > 1 %}
+        <a class="btn btn-sm {{ 'btn-primary' if d == days else 'btn-secondary' }}" href="/stats?days={{ d }}">{{ d }}d</a>
+        {% endfor %}
+    </div>
+</header>
+
+<!-- Now playing: the real test - is what people watch served from the cache? -->
+<div class="card st-section">
+    <div class="card-header">
+        <span><i data-lucide="play-circle"></i> Playing now</span>
+        <span class="text-muted">served from cache = array disks can stay asleep</span>
+    </div>
+    <div id="st-now" hx-get="/stats/now" hx-trigger="load, every 30s" hx-swap="innerHTML">
+        <div class="card-body text-muted">Checking sessions…</div>
+    </div>
+</div>
+
+<div class="stats-row">
+    <div class="stat-card">
+        <div class="stat-card-header"><i data-lucide="zap"></i> Cached</div>
+        <div class="stat-value">{{ s.cached_files }}</div>
+        <div class="stat-detail">{{ format_bytes(s.bytes_cached) if s.bytes_cached else '0 B' }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-card-header"><i data-lucide="arrow-down"></i> Moved back</div>
+        <div class="stat-value">{{ s.restored_files }}</div>
+        <div class="stat-detail">{{ format_bytes(s.bytes_restored) if s.bytes_restored else '0 B' }}</div>
+    </div>
+    <div class="stat-card {{ 'stat-card-warning' if s.evicted_files }}">
+        <div class="stat-card-header"><i data-lucide="trash-2"></i> Evicted / released</div>
+        <div class="stat-value">{{ s.evicted_files }}</div>
+        <div class="stat-detail">{{ format_bytes(s.bytes_evicted) if s.bytes_evicted else '0 B' }}</div>
+    </div>
+    <div class="stat-card {{ 'stat-card-danger' if s.failed_files }}">
+        <div class="stat-card-header"><i data-lucide="alert-triangle"></i> Failed</div>
+        <div class="stat-value">{{ s.failed_files }}</div>
+        <div class="stat-detail">{{ s.runs }} run{{ '' if s.runs == 1 else 's' }}{% if s.skipped_files %} · {{ s.skipped_files }} skipped{% endif %}</div>
+    </div>
+    {% if cache %}
+    <div class="stat-card {{ 'stat-card-danger' if cache.cache_limit_exceeded else ('stat-card-warning' if cache.cache_limit_approaching) }}">
+        <div class="stat-card-header"><i data-lucide="hard-drive"></i> Cache drive</div>
+        <div class="stat-value">{{ cache.usage_percent }}%</div>
+        <div class="stat-detail">{{ cache.cache_size }} of {{ cache.cache_limit }} · {{ cache.cached_files_size }} by PlexCache</div>
+    </div>
+    {% endif %}
+</div>
+
+<div class="card st-section">
+    <div class="card-header">
+        <span>Data moved per day</span>
+        <span class="st-legend">
+            <span><i class="st-swatch st-cache"></i>Cached</span>
+            <span><i class="st-swatch st-restore"></i>Moved back</span>
+            <span><i class="st-swatch st-evict"></i>Evicted</span>
+        </span>
+    </div>
+    <div class="card-body">
+        <div class="st-chart" role="img" aria-label="Bytes moved per day">
+            {% for d in s.per_day %}
+            <div class="st-day" title="{{ d.day }}&#10;Cached: {{ format_bytes(d.cache) if d.cache else '0 B' }}&#10;Moved back: {{ format_bytes(d.restore) if d.restore else '0 B' }}&#10;Evicted: {{ format_bytes(d.evict) if d.evict else '0 B' }}">
+                <div class="st-bars">
+                    <span class="st-bar st-cache" style="height: {{ (d.cache / peak * 100) | round(1) }}%"></span>
+                    <span class="st-bar st-restore" style="height: {{ (d.restore / peak * 100) | round(1) }}%"></span>
+                    <span class="st-bar st-evict" style="height: {{ (d.evict / peak * 100) | round(1) }}%"></span>
+                </div>
+                {% if s.per_day|length <= 31 or loop.index0 % 7 == 0 %}
+                <span class="st-day-label">{{ d.day[8:10] }}</span>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        <div class="text-muted st-axis-note">Peak day: {{ format_bytes(peak) if peak > 1 else '0 B' }}</div>
+    </div>
+</div>
+
+<div class="st-grid">
+    <div class="card st-section">
+        <div class="card-header"><span>Why files moved</span></div>
+        <div class="card-body">
+            {% for r in s.reasons %}
+            <a class="st-hbar" href="/moves?days={{ days }}&reason={{ r.code }}" title="Show these in Moves">
+                <span class="st-hbar-label">{{ r.label }}</span>
+                <span class="st-hbar-track"><span class="st-hbar-fill" style="width: {{ (r.count / max_reason * 100) | round(1) }}%"></span></span>
+                <span class="st-hbar-value">{{ r.count }}</span>
+            </a>
+            {% else %}<p class="text-muted">No moves recorded yet.</p>{% endfor %}
+        </div>
+    </div>
+
+    <div class="card st-section">
+        <div class="card-header"><span>Cached per user</span></div>
+        <div class="card-body">
+            {% for u in s.users %}
+            <div class="st-hbar">
+                <span class="st-hbar-label">{{ u.user }}</span>
+                <span class="st-hbar-track"><span class="st-hbar-fill st-fill-user" style="width: {{ (u.bytes / max_user * 100) | round(1) }}%"></span></span>
+                <span class="st-hbar-value">{{ format_bytes(u.bytes) }}</span>
+            </div>
+            {% else %}<p class="text-muted">No per-user data yet.</p>{% endfor %}
+        </div>
+    </div>
+
+    <div class="card st-section">
+        <div class="card-header"><span>Top shows (episodes cached)</span></div>
+        <div class="card-body">
+            <table class="st-table"><tbody>
+            {% for sh in s.shows %}<tr><td>{{ sh.show }}</td><td class="st-num">{{ sh.count }}</td></tr>
+            {% else %}<tr><td class="text-muted">No episodes cached yet.</td></tr>{% endfor %}
+            </tbody></table>
+        </div>
+    </div>
+
+    <div class="card st-section">
+        <div class="card-header">
+            <span>Churn</span>
+            <span class="text-muted" title="Files cached more than once in this period: they went back to the array and returned. A lot of churn means retention or prefetch settings are too tight.">cached more than once</span>
+        </div>
+        <div class="card-body">
+            <table class="st-table"><tbody>
+            {% for c in s.churn %}<tr><td><a href="/moves?days=90&q={{ c.name | urlencode }}" title="{{ c.path }}">{{ c.name | truncate_filename(50) }}</a></td><td class="st-num">{{ c.count }}×</td></tr>
+            {% else %}<tr><td class="text-muted">No churn - nothing bounced between cache and array.</td></tr>{% endfor %}
+            </tbody></table>
+        </div>
+    </div>
+</div>
+
+{% if s.recent_failures %}
+<div class="card st-section">
+    <div class="card-header"><span><i data-lucide="alert-triangle"></i> Recent failures</span><a href="/moves?days={{ days }}&status=failed">all</a></div>
+    <div class="card-body">
+        <table class="st-table"><tbody>
+        {% for e in s.recent_failures %}
+        <tr><td class="text-muted">{{ e.ts | format_datetime }}</td><td title="{{ e.path }}">{{ e.name | truncate_filename(50) }}</td><td>{{ e.note or e.reason }}</td></tr>
+        {% endfor %}
+        </tbody></table>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from web import __version__
 from web.config import templates, STATIC_DIR, PROJECT_ROOT, CONFIG_DIR, SETTINGS_FILE
-from web.routers import dashboard, cache, settings, operations, logs, api, maintenance, setup, auth, pinned, recently_added
+from web.routers import dashboard, cache, settings, operations, logs, api, maintenance, setup, auth, pinned, recently_added, insights
 from web.services import get_scheduler_service, get_settings_service
 from web.services.web_cache import init_web_cache, get_web_cache_service
 import os
@@ -211,6 +211,8 @@ app.include_router(setup.router, tags=["setup"])
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(pinned.router, prefix="/api/pinned", tags=["pinned"])
 app.include_router(recently_added.router, prefix="/recently-added", tags=["recently-added"])
+app.include_router(insights.router, prefix="/moves", tags=["moves"])
+app.include_router(insights.stats_router, prefix="/stats", tags=["stats"])
 
 
 # Middleware to redirect to setup wizard if not configured

@@ -113,6 +113,21 @@ from core.media_grouping import format_season_episode as _format_season_episode
 templates.env.globals["format_season_episode"] = _format_season_episode
 
 
+def get_media_server() -> str:
+    """Configured media server: "plex" (default) or "jellyfin"."""
+    try:
+        if SETTINGS_FILE.exists():
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                value = json.load(f).get("media_server", "plex")
+            return str(value or "plex").strip().lower()
+    except (json.JSONDecodeError, IOError, AttributeError):
+        pass
+    return "plex"
+
+
+templates.env.globals["media_server"] = get_media_server
+
+
 def get_time_format() -> str:
     """Read time_format from settings JSON. Returns '12h' or '24h' (default)."""
     try:

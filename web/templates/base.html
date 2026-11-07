@@ -79,10 +79,24 @@
                         <span>Cached Files</span>
                     </a>
                 </li>
+                {% if media_server() != 'jellyfin' %}
                 <li>
                     <a href="/recently-added" data-tooltip="Recently Added" {% if page_title == 'Recently Added' %}class="active"{% endif %}>
                         <i data-lucide="sparkles"></i>
                         <span>Recently Added</span>
+                    </a>
+                </li>
+                {% endif %}
+                <li>
+                    <a href="/moves" data-tooltip="Moves" {% if page_title == 'Moves' %}class="active"{% endif %}>
+                        <i data-lucide="arrow-left-right"></i>
+                        <span>Moves</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="/stats" data-tooltip="Stats" {% if page_title == 'Stats' %}class="active"{% endif %}>
+                        <i data-lucide="bar-chart-3"></i>
+                        <span>Stats</span>
                     </a>
                 </li>
                 <li>

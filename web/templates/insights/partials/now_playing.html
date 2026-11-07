@@ -1,0 +1,25 @@
+{% if error %}
+<div class="card-body text-muted"><i data-lucide="plug-zap"></i> Could not reach the media server: {{ error }}</div>
+{% elif not sessions %}
+<div class="card-body text-muted">Nothing is playing right now.</div>
+{% else %}
+<table class="st-table st-now">
+    <tbody>
+    {% for s in sessions %}
+    <tr>
+        <td>
+            {% if s.location == 'cache' %}<span class="badge badge-success"><i data-lucide="zap"></i> From cache</span>
+            {% elif s.location == 'array' %}<span class="badge badge-warning"><i data-lucide="server"></i> From array</span>
+            {% else %}<span class="badge badge-muted" title="Path could not be mapped - check Path Mappings">Unknown</span>{% endif %}
+        </td>
+        <td><strong>{{ s.title }}</strong><div class="text-muted" title="{{ s.server_path or '' }}">{{ (s.real_path or s.server_path or 'no path') | truncate_filename(70) }}</div></td>
+        <td>{{ s.user }}<div class="text-muted">{{ s.client }}</div></td>
+        <td>
+            {% if s.real_path %}<a href="/moves?days=30&q={{ s.real_path.split('/')[-1] | urlencode }}" title="Why is this file where it is?">history</a>{% endif %}
+        </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+<script>lucide.createIcons();</script>

@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+
+{% block content %}
+<header class="page-header">
+    <div class="page-title">
+        <div class="page-title-icon"><i data-lucide="arrow-left-right"></i></div>
+        <div>
+            <h1>Moves</h1>
+            <p>Every file PlexCache moved, held or skipped &mdash; and why</p>
+        </div>
+    </div>
+    <div class="action-buttons">
+        <a class="btn btn-secondary" id="mv-export" href="/moves/export">
+            <i data-lucide="download"></i> CSV
+        </a>
+        <button class="btn btn-secondary" hx-get="/moves/list" hx-include="#mv-filters"
+                hx-target="#mv-content" hx-swap="innerHTML">
+            <i data-lucide="refresh-cw"></i> Refresh
+        </button>
+    </div>
+</header>
+
+<div class="alert alert-info" style="margin-bottom: 1.25rem;">
+    <i data-lucide="info"></i>
+    <span>
+        Dry runs are recorded too: run with <strong>Dry run</strong> to see exactly what
+        would move with your current settings, without touching any file.
+    </span>
+</div>
+
+<form id="mv-filters" class="card mv-filters" onsubmit="return false;"
+      hx-get="/moves/list" hx-target="#mv-content" hx-swap="innerHTML"
+      hx-trigger="change, keyup changed delay:400ms from:#mv-q">
+    <input type="hidden" name="run_id" id="mv-run" value="{{ run_id }}">
+    <label>Period
+        <select name="days">
+            {% for d in allowed_days %}
+            <option value="{{ d }}" {% if d == pre.days %}selected{% endif %}>{{ 'Last 24h' if d == 1 else 'Last ' ~ d ~ ' days' }}</option>
+            {% endfor %}
+        </select>
+    </label>
+    <label>Action
+        <select name="action">
+            <option value="">All</option>
+            {% for k, v in action_labels.items() %}<option value="{{ k }}" {% if k == pre.action %}selected{% endif %}>{{ v }}</option>{% endfor %}
+        </select>
+    </label>
+    <label>Status
+        <select name="status">
+            <option value="">All</option>
+            {% for k, v in status_labels.items() if k != 'planned' %}<option value="{{ k }}" {% if k == pre.status %}selected{% endif %}>{{ v }}</option>{% endfor %}
+        </select>
+    </label>
+    <label>Reason
+        <select name="reason" id="mv-reason">
+            <option value="">All</option>
+            {% for k, v in reason_labels.items() %}<option value="{{ k }}" {% if k == pre.reason %}selected{% endif %}>{{ v }}</option>{% endfor %}
+        </select>
+    </label>
+    <label>Dry runs
+        <select name="dry">
+            <option value="show">Show</option>
+            <option value="hide">Hide</option>
+        </select>
+    </label>
+    <label class="mv-search">Search
+        <input type="search" name="q" id="mv-q" placeholder="File name, show, reason…" value="{{ pre.q }}">
+    </label>
+</form>
+
+<div id="mv-content" hx-get="/moves/list" hx-include="#mv-filters" hx-trigger="load" hx-swap="innerHTML">
+    <div class="card"><div class="card-body" style="text-align:center;padding:3rem;">
+        <span class="spinner" style="width:28px;height:28px;"></span>
+        <div class="text-muted" style="margin-top:.75rem;">Loading journal…</div>
+    </div></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    // Clicking a run chip filters to that run (and back).
+    document.addEventListener('click', function (ev) {
+        var chip = ev.target.closest('[data-run-id]');
+        if (!chip) return;
+        var input = document.getElementById('mv-run');
+        input.value = (input.value === chip.dataset.runId) ? '' : chip.dataset.runId;
+        htmx.trigger('#mv-filters', 'change');
+    });
+    // Keep the CSV link in sync with the filters.
+    document.body.addEventListener('htmx:afterSwap', function (ev) {
+        if (ev.target.id !== 'mv-content') return;
+        var params = new URLSearchParams(new FormData(document.getElementById('mv-filters')));
+        document.getElementById('mv-export').href = '/moves/export?' + params.toString();
+    });
+})();
+</script>
+{% endblock %}

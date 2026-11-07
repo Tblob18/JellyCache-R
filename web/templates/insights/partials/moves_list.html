@@ -1,0 +1,87 @@
+{% macro action_badge(a) -%}
+{%- if a == 'cache' %}<span class="badge badge-success"><i data-lucide="zap"></i> Cached</span>
+{%- elif a == 'restore' %}<span class="badge badge-info"><i data-lucide="arrow-down"></i> Moved back</span>
+{%- elif a == 'evict' %}<span class="badge badge-warning"><i data-lucide="trash-2"></i> Evicted</span>
+{%- elif a == 'release' %}<span class="badge badge-released"><i data-lucide="send"></i> Released</span>
+{%- elif a == 'skip' %}<span class="badge badge-muted"><i data-lucide="circle-slash"></i> Skipped</span>
+{%- elif a == 'hold' %}<span class="badge badge-pinned"><i data-lucide="pause"></i> Held</span>
+{%- else %}<span class="badge badge-muted">{{ a }}</span>{% endif -%}
+{%- endmacro %}
+
+{% macro status_badge(s) -%}
+{%- if s == 'done' %}<span class="mv-status mv-status-done">✓ done</span>
+{%- elif s == 'failed' %}<span class="mv-status mv-status-failed">✗ failed</span>
+{%- elif s == 'dry_run' %}<span class="mv-status mv-status-dry">dry run</span>
+{%- else %}<span class="mv-status">{{ status_labels.get(s, s) }}</span>{% endif -%}
+{%- endmacro %}
+
+{# ── run strip ── #}
+{% if runs %}
+<div class="mv-runs">
+    {% for r in runs %}
+    <button type="button" class="mv-run-chip {% if f.run_id == r.run_id %}active{% endif %} {% if r.dry_run %}dry{% endif %}"
+            data-run-id="{{ r.run_id }}" title="Run {{ r.run_id }} ({{ r.run_source }}{{ ', dry run' if r.dry_run }}) - click to filter">
+        <span class="mv-run-time">{{ r.ts | format_datetime }}{% if r.dry_run %} <span class="mv-run-tag">dry run</span>{% endif %}</span>
+        <span class="mv-run-counts">
+            {% if r.counts.cache %}<span class="mv-c-cache">+{{ r.counts.cache }}</span>{% endif %}
+            {% if r.counts.restore %}<span class="mv-c-restore">−{{ r.counts.restore }}</span>{% endif %}
+            {% if r.counts.evict %}<span class="mv-c-evict">⌫{{ r.counts.evict }}</span>{% endif %}
+            {% if r.failed %}<span class="mv-c-failed">!{{ r.failed }}</span>{% endif %}
+            {% if not (r.counts.cache or r.counts.restore or r.counts.evict) %}<span class="text-muted">no moves</span>{% endif %}
+        </span>
+    </button>
+    {% endfor %}
+</div>
+{% endif %}
+
+<div class="card">
+    <div class="card-header">
+        <span>{{ total }} decision{{ '' if total == 1 else 's' }} · {{ total_size }}
+            {% if f.run_id %}· run <code>{{ f.run_id[:8] }}</code>{% endif %}</span>
+        {% if truncated %}<span class="text-muted">showing newest {{ entries|length }}</span>{% endif %}
+    </div>
+    {% if entries %}
+    <div class="table-wrapper">
+    <table class="mv-table">
+        <thead><tr>
+            <th>When</th><th>Action</th><th>File</th><th>Why</th><th>Users</th><th style="text-align:right">Size</th>
+        </tr></thead>
+        <tbody>
+        {% for e in entries %}
+        <tr class="{% if e.status == 'failed' %}mv-row-failed{% endif %}">
+            <td class="mv-when">{{ e.ts | format_datetime }}</td>
+            <td class="mv-action">{{ action_badge(e.action) }}<br>{{ status_badge(e.status) }}</td>
+            <td class="mv-file">
+                <details>
+                    <summary title="{{ e.path }}">{{ e.name | truncate_filename(60) }}</summary>
+                    <dl class="mv-detail">
+                        <dt>Path</dt><dd><code>{{ e.path }}</code></dd>
+                        {% if e.cache_path %}<dt>Cache</dt><dd><code>{{ e.cache_path }}</code></dd>{% endif %}
+                        {% if e.related %}<dt>Related</dt><dd><code>{{ e.related }}</code></dd>{% endif %}
+                        {% if e.media and e.media.show %}<dt>Episode</dt><dd>{{ e.media.show }} {{ format_season_episode(e.media.season, e.media.episode) }}</dd>{% endif %}
+                        {% if e.priority is defined and e.priority is not none %}<dt>Priority</dt><dd>{{ e.priority }}</dd>{% endif %}
+                        {% if e.note %}<dt>Note</dt><dd>{{ e.note }}</dd>{% endif %}
+                        <dt>Run</dt><dd><code>{{ e.run_id[:8] }}</code> · {{ e.run_source }} · {{ e.server }}</dd>
+                    </dl>
+                </details>
+            </td>
+            <td class="mv-reason">
+                <span class="mv-reason-chip">{{ reason_labels.get(e.reason_code, e.reason_code) }}</span>
+                <div>{{ e.reason }}</div>
+            </td>
+            <td class="mv-users">{{ e.users | join(', ') if e.users else '—' }}</td>
+            <td style="text-align:right; white-space:nowrap">{{ format_bytes(e.size_bytes) if e.size_bytes else '—' }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <div class="card-body empty-state">
+        <i data-lucide="inbox"></i>
+        <p>No decisions match. Runs are recorded from the moment this version is installed &mdash;
+           start a run (or a dry run) from the dashboard.</p>
+    </div>
+    {% endif %}
+</div>
+<script>lucide.createIcons();</script>
